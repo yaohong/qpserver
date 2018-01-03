@@ -19,7 +19,7 @@
 decode_qp_packet(Bin) ->
     #qp_packet{cmd = Cmd, serialized = Body} = common_pb:decode_qp_packet(Bin),
     decode_qp_packet(Cmd, Body).
-
+decode_qp_packet(_P1, _P2) -> ok.
 
 
 

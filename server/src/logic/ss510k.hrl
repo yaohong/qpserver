@@ -50,6 +50,9 @@
 -define(VALUE_DA, 16).
 
 
+%%排序的类型
+-define(ST_NORMAL, 1).
+-define(ST_BOMB, 2).
 
 
 
