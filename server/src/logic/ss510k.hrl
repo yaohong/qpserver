@@ -48,6 +48,7 @@
 -define(VALUE_2, 15).
 %%-define(VALUE_XIAO, 16).
 -define(VALUE_DA, 16).
+-define(VALUE_LAIZI, 17).
 
 
 %%排序的类型

@@ -16,7 +16,8 @@
 ]).
 
 -export([
-	sort/2
+	sort/2,
+	card_format/1
 ]).
 
 
@@ -40,16 +41,43 @@ parse_card(Card) when is_integer(Card) ->
 sort(CardList, ?ST_NORMAL) when is_list(CardList) ->
 	SortFunc =
 		fun(L, R) ->
-			{LC, LV} = parse_card(L),
-			{RC, RV} = parse_card(R),
-			if
-				LC =:= ?COLOR_LAIZI -> false;
-				RC =:= ?COLOR_LAIZI -> true;
-				true -> LV > RV
-			end
+			{_, LV} = parse_card(L),
+			{_, RV} = parse_card(R),
+			LV > RV
 		end,
 	lists:sort(SortFunc, CardList);
 sort(CardList, ?ST_BOMB) when is_list(CardList) ->
 	ok.
 
 
+card_format(CardList) when is_list(CardList) ->
+	ValueList =
+		lists:map(
+			fun(Card) ->
+				{Color, Value} = parse_card(Card),
+				[card_color_format(Color), "-", card_value_format(Value)]
+			end, CardList),
+	lists:flatten(ValueList).
+
+card_color_format(?COLOR_FANGKUAI) -> "方块";
+card_color_format(?COLOR_MEIHUA) -> "梅花";
+card_color_format(?COLOR_HONGTAO) -> "红桃";
+card_color_format(?COLOR_HEITAO) -> "黑桃";
+card_color_format(?COLOR_DA) -> "大王";
+card_color_format(?COLOR_LAIZI) -> "癞子".
+
+card_value_format(?VALUE_3) -> "3";
+card_value_format(?VALUE_4) -> "4";
+card_value_format(?VALUE_5) -> "5";
+card_value_format(?VALUE_6) -> "6";
+card_value_format(?VALUE_7) -> "7";
+card_value_format(?VALUE_8) -> "8";
+card_value_format(?VALUE_9) -> "9";
+card_value_format(?VALUE_10) -> "10";
+card_value_format(?VALUE_J) -> "J";
+card_value_format(?VALUE_Q) -> "Q";
+card_value_format(?VALUE_K) -> "K";
+card_value_format(?VALUE_A) -> "A";
+card_value_format(?VALUE_2) -> "2";
+card_value_format(?VALUE_DA) -> "大王";
+card_value_format(?VALUE_LAIZI) -> "癞子".

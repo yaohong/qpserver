@@ -86,7 +86,7 @@ init_card_pool() ->
       ss510k_util:generate_card(?COLOR_HEITAO, ?VALUE_2), ss510k_util:generate_card(?COLOR_HEITAO, ?VALUE_2),
 
       ss510k_util:generate_card(?COLOR_DA, ?VALUE_DA), ss510k_util:generate_card(?COLOR_DA, ?VALUE_DA),
-      ss510k_util:generate_card(?COLOR_LAIZI, 0), ss510k_util:generate_card(?COLOR_LAIZI, 0)
+      ss510k_util:generate_card(?COLOR_LAIZI, ?VALUE_LAIZI), ss510k_util:generate_card(?COLOR_LAIZI, ?VALUE_LAIZI)
     ],
   %%混乱排序
   L2 = [{Card, qp_util:random_in_range(1000000, 9999999)} || Card <- L],
