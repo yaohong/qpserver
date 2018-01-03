@@ -30,8 +30,8 @@ generate_card(Color, Value) ->
 
 
 parse_card(Card) when is_integer(Card) ->
-	Value = Card band 2#00001111,
-	Color = (Card band 2#11110000) bsr 8,
+	Value = Card band 2#000000001111111,
+	Color = (Card band 2#1111111100000000) bsr 8,
 	{Color, Value}.
 
 
@@ -55,7 +55,7 @@ card_format(CardList) when is_list(CardList) ->
 		lists:map(
 			fun(Card) ->
 				{Color, Value} = parse_card(Card),
-				[card_color_format(Color), "-", card_value_format(Value)]
+				card_color_format(Color) ++ "-" ++ card_value_format(Value)
 			end, CardList),
 	lists:flatten(ValueList).
 

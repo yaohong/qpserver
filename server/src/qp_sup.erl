@@ -21,7 +21,7 @@ start_link() ->
 init([]) ->
 	{success, {DbAddr, DbPort, DbUser, DbPassword, DbName}} = qp_config:get_cfg(db_addr),
 
-	sql:start(qp, DbAddr, DbPort, DbUser, DbPassword, DbName),
+	%%sql:start(qp, DbAddr, DbPort, DbUser, DbPassword, DbName),
 
 	TimerManager =
 		{timer_manager,

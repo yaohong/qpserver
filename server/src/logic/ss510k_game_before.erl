@@ -91,12 +91,12 @@ init_card_pool() ->
   %%混乱排序
   L2 = [{Card, qp_util:random_in_range(1000000, 9999999)} || Card <- L],
   SortFunc =
-    fun(L, R) ->
-      {_, LV} = L,
-      {_, RV} = R,
+    fun(LCard, RCard) ->
+      {_, LV} = LCard,
+      {_, RV} = RCard,
       LV > RV
     end,
-  lists:sort(SortFunc, L2).
+  [RawCard || {RawCard, _} <- lists:sort(SortFunc, L2)].
 
 
 %%
@@ -105,4 +105,4 @@ deal(CardPool) when is_list(CardPool) ->
   deal(CardPool, [[], [], [], []]).
 deal([], [L1, L2, L3, L4]) -> {L1, L2, L3, L4};
 deal([Card|TCardList], [L|T]) ->
-  deal(TCardList, T ++ [Card|L]).
+  deal(TCardList, T ++ [[Card|L]]).
