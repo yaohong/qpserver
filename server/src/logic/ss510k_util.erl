@@ -9,6 +9,7 @@
 -module(ss510k_util).
 -author("yaohong").
 -include("ss510k.hrl").
+-include("../../deps/file_log/include/file_log.hrl").
 %% API
 -export([
 	generate_card/1, generate_card/2,
@@ -17,7 +18,8 @@
 
 -export([
 	sort/2,
-	card_format/1
+	card_format/1,
+	test_print/0
 ]).
 
 
@@ -41,9 +43,14 @@ parse_card(Card) when is_integer(Card) ->
 sort(CardList, ?ST_NORMAL) when is_list(CardList) ->
 	SortFunc =
 		fun(L, R) ->
-			{_, LV} = parse_card(L),
-			{_, RV} = parse_card(R),
-			LV > RV
+			{LC, LV} = parse_card(L),
+			{RC, RV} = parse_card(R),
+			if
+				LV =:= RV ->
+					LC > RC;
+				true ->
+					LV > RV
+			end
 		end,
 	lists:sort(SortFunc, CardList);
 sort(CardList, ?ST_BOMB) when is_list(CardList) ->
@@ -57,7 +64,8 @@ card_format(CardList) when is_list(CardList) ->
 				{Color, Value} = parse_card(Card),
 				card_color_format(Color) ++ "-" ++ card_value_format(Value)
 			end, CardList),
-	lists:flatten(ValueList).
+	V2 = string:join(ValueList, " "),
+	lists:flatten(V2).
 
 card_color_format(?COLOR_FANGKUAI) -> "方块";
 card_color_format(?COLOR_MEIHUA) -> "梅花";
@@ -81,3 +89,16 @@ card_value_format(?VALUE_A) -> "A";
 card_value_format(?VALUE_2) -> "2";
 card_value_format(?VALUE_DA) -> "大王";
 card_value_format(?VALUE_LAIZI) -> "癞子".
+
+
+test_print() ->
+	L = ss510k_game_before:init_card_pool(),
+	{L1, L2, L3, L4} = ss510k_game_before:deal(L),
+	L11 = ss510k_util:sort(L1, ?ST_NORMAL),
+	L12 = ss510k_util:sort(L2, ?ST_NORMAL),
+	L13 = ss510k_util:sort(L3, ?ST_NORMAL),
+	L14 = ss510k_util:sort(L4, ?ST_NORMAL),
+	io:format("~ts~n", [card_format(L11)]),
+	io:format("~ts~n", [card_format(L12)]),
+	io:format("~ts~n", [card_format(L13)]),
+	io:format("~ts~n", [card_format(L14)]).
