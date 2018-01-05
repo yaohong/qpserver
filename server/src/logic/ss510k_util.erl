@@ -54,6 +54,8 @@ sort(CardList, ?ST_NORMAL) when is_list(CardList) ->
 		end,
 	lists:sort(SortFunc, CardList);
 sort(CardList, ?ST_BOMB) when is_list(CardList) ->
+	%%炸弹优先排序
+	
 	ok.
 
 
