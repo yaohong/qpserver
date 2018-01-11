@@ -49,11 +49,12 @@
 %%-define(VALUE_XIAO, 16).
 -define(VALUE_DA, 16).
 -define(VALUE_LAIZI, 17).
-
+-define(VALID_VALUE_LIST, [?VALUE_3, ?VALUE_4, ?VALUE_5, ?VALUE_6, ?VALUE_7, ?VALUE_8, ?VALUE_9, ?VALUE_10, ?VALUE_J, ?VALUE_Q, ?VALUE_K, ?VALUE_A, ?VALUE_2, ?VALUE_DA]).
 
 %%排序的类型
 -define(ST_NORMAL, 1).
 -define(ST_BOMB, 2).
+-define(ST_510K, 3).    %%五十K优先炸弹
 
 
 
