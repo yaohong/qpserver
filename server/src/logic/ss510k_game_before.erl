@@ -11,14 +11,14 @@
 -include("ss510k.hrl").
 %% API
 -export([
-  init_card_pool/0,
+  init_card_pool/1,
   deal/1
 ]).
 
 
 %%初始化牌库
-init_card_pool() ->
-  L =
+init_card_pool(RoomCfg) ->
+  BasicCardList =
     [
       ss510k_util:generate_card(?COLOR_FANGKUAI, ?VALUE_3), ss510k_util:generate_card(?COLOR_FANGKUAI, ?VALUE_3),
       ss510k_util:generate_card(?COLOR_MEIHUA, ?VALUE_3), ss510k_util:generate_card(?COLOR_MEIHUA, ?VALUE_3),
@@ -83,13 +83,20 @@ init_card_pool() ->
       ss510k_util:generate_card(?COLOR_FANGKUAI, ?VALUE_2), ss510k_util:generate_card(?COLOR_FANGKUAI, ?VALUE_2),
       ss510k_util:generate_card(?COLOR_MEIHUA, ?VALUE_2), ss510k_util:generate_card(?COLOR_MEIHUA, ?VALUE_2),
       ss510k_util:generate_card(?COLOR_HONGTAO, ?VALUE_2), ss510k_util:generate_card(?COLOR_HONGTAO, ?VALUE_2),
-      ss510k_util:generate_card(?COLOR_HEITAO, ?VALUE_2), ss510k_util:generate_card(?COLOR_HEITAO, ?VALUE_2),
-
-      ss510k_util:generate_card(?COLOR_DA, ?VALUE_DA), ss510k_util:generate_card(?COLOR_DA, ?VALUE_DA),
-      ss510k_util:generate_card(?COLOR_LAIZI, ?VALUE_LAIZI), ss510k_util:generate_card(?COLOR_LAIZI, ?VALUE_LAIZI)
+      ss510k_util:generate_card(?COLOR_HEITAO, ?VALUE_2), ss510k_util:generate_card(?COLOR_HEITAO, ?VALUE_2)
     ],
+  CardList =
+    case RoomCfg:get(is_laizi_playmethod) of
+      true ->
+        [
+          ss510k_util:generate_card(?COLOR_DA, ?VALUE_DA),
+          ss510k_util:generate_card(?COLOR_DA, ?VALUE_DA),
+          ss510k_util:generate_card(?COLOR_LAIZI, ?VALUE_LAIZI),
+          ss510k_util:generate_card(?COLOR_LAIZI, ?VALUE_LAIZI)|BasicCardList];
+      false -> BasicCardList
+    end,
   %%混乱排序
-  L2 = [{Card, qp_util:random_in_range(1000000, 9999999)} || Card <- L],
+  L2 = [{Card, qp_util:random_in_range(1000000, 9999999)} || Card <- CardList],
   SortFunc =
     fun(LCard, RCard) ->
       {_, LV} = LCard,

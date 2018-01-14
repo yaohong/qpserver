@@ -19,6 +19,8 @@
 	is_bomb/1
 ]).
 
+-export([format_laizi_replace_info/1]).
+
 %%打印出牌的结果
 print_playcard_type({?CARD_DAN, V}) -> io:format("没有癞子-单牌-~ts~n", [ss510k_util:card_value_format(V)]);
 print_playcard_type({?CARD_DUI, {V, Count}}) -> io:format("没有癞子-~p对-最大对[~ts]~n", [Count, ss510k_util:card_value_format(V)]);
@@ -45,6 +47,7 @@ print_playcard_type_1({{?CARD_510K, false}, LaiziInfo}) ->
 print_playcard_type_1({{?CARD_BOMB, {V, Count}}, LaiziInfo}) ->
 	io:format("[~p]个癞子-[~p]炸-~ts-~ts~n", [length(LaiziInfo), Count, ss510k_util:card_value_format(V), format_laizi_replace_info(LaiziInfo)]).
 
+format_laizi_replace_info([]) -> "";
 format_laizi_replace_info([Card]) ->
 	{C, V} = ss510k_util:parse_card(Card),
 	"癞子替换成" ++ ss510k_util:card_color_format(C) ++ ss510k_util:card_value_format(V);
@@ -68,9 +71,9 @@ test_get_playcard_type(CVList) ->
 	print_playcard_type(V).
 
 %%出的牌从小到大排序
-get_playcard_type(CardList) ->
+get_playcard_type(ServerCardList) ->
 	%%先把癞子取出来
-	{NewCardList, CardLaiziList} = ss510k_util:delete_card(?VALUE_LAIZI, CardList),
+	{NewCardList, CardLaiziList} = ss510k_util:delete_card(?VALUE_LAIZI, ServerCardList),
 	LaiziCount = length(CardLaiziList),
 	CardCount = length(NewCardList),
 	if

@@ -19,10 +19,9 @@
 -export([
 	sort/1, sort/2, card_asc_sort/1,
 	card_color_format/1, card_value_format/1, card_format/1,
-	test_print/0,
+	test_print/1,
 
-	find_card_count/2,
-	delete_card/2
+	find_card_count/2, delete_card/2
 ]).
 
 
@@ -139,7 +138,7 @@ card_asc_sort(CardList) when is_list(CardList) ->
 		end,
 	lists:sort(SortFunc, CardList).
 
-find_card_count(CardValue, CardList) ->
+find_card_count(CardValue, CardList) when is_integer(CardValue) ->
 	find_card_count_1(CardValue, CardList, 0).
 find_card_count_1(_, [], CardCount) -> CardCount;
 find_card_count_1(CardValue, [Card|T], CardCount) ->
@@ -148,8 +147,8 @@ find_card_count_1(CardValue, [Card|T], CardCount) ->
 		_ -> find_card_count_1(CardValue, T, CardCount)
 	end.
 
-
-delete_card(CardValue, CardList) ->
+%%删除牌(牌值)
+delete_card(CardValue, CardList) when is_integer(CardValue) ->
 	delete_card_1(CardValue, CardList, [], []).
 delete_card_1(_, [], NewCardList, DeleteCardList) -> {lists:reverse(NewCardList), DeleteCardList};
 delete_card_1(CardValue, [Card|OldCardList], NewCardList, DeleteCardList) ->
@@ -195,8 +194,9 @@ card_value_format(?VALUE_DA) -> "大王";
 card_value_format(?VALUE_LAIZI) -> "癞子".
 
 
-test_print() ->
-	L = ss510k_game_before:init_card_pool(),
+test_print(IsLaiziPlayMethod) ->
+	RoomCfg = ss510k_room_cfg:new(200, IsLaiziPlayMethod, false, false, false, false),
+	L = ss510k_game_before:init_card_pool(RoomCfg),
 	{L1, L2, L3, L4} = ss510k_game_before:deal(L),
 	statistics(wall_clock),
 	L11 = ss510k_util:sort(L1, ?ST_NORMAL),

@@ -1,0 +1,73 @@
+// Client <-> WorldServer
+
+package qp_mj;
+
+message qp_logic {
+    required int32 cmd = 1;
+    optional bytes serialized = 2;
+}
+
+
+enum ws_cmd {
+    CMD_MJ_GAME_START_NOTIFY = 10001; //游戏开始
+    CMD_MJ_GAME_END_NOTIFY = 10002;   //游戏结束
+
+    CMD_MJ_OPER_REQ = 10003;				//游戏操作
+	CMD_MJ_OPER_NOTIFY = 10004;			//游戏操作的通知
+
+	CMD_MJ_OPER_ERROR = 10005;          //操作错误
+	
+}
+
+message qp_mj_game_start_notify {
+    repeated uint32 pai = 1;					//自己的牌
+	required int32 banker_seat_number = 2;		//庄家
+	optional uint32 oper_flag = 3;				//操作信息(庄家自己才会有效)
+}
+
+message seat_score_item {
+    required int32 seat_number = 1;
+    required int32 score = 2;
+}
+
+message qp_mj_game_end_notify {
+    required uint32 end_type = 1;               //0：中途有人退出了 1：游戏穿掉了 2：游戏正常结束
+    required int32  hupai_seatnumber = 2;       //end_type=2时，胡牌的座位号
+    required uint32 hupai_value = 3;            //end_type=2时，胡牌的值
+    required uint32 hupai_type = 4;             //end_type=2时，0自摸 1吃胡
+    required int32  fangpao_seatnumber = 5;     //end_type=2时, 吃胡时，放炮的座位号
+    repeated uint32 seat0_pai = 6;
+    repeated uint32 seat1_pai = 7;
+    repeated uint32 seat2_pai = 8;
+    repeated uint32 seat3_pai = 9;
+    repeated seat_score_item scores = 10;       //获取的分值
+}
+
+message qp_mj_oper_req {
+	required uint32 type = 1;					//操作类型,（吃，碰，杠， 过， 出，胡）
+	optional uint32 v1 = 2;						//操作对应的值1
+	optional uint32 v2 = 3;						//操作对应的值2
+}
+
+message qp_mj_oper_notify {						//有人操作的通知(所有人都会收到)
+	required int32 seat_numer = 1;				//做操作的座位号
+	required uint32 type = 2;					//操作类型 （吃，碰，杠，过，出，胡）
+	optional uint32 v1 = 3;						//操作对应的值1
+	optional uint32 v2 = 4;						//操作对应的值和返回的值(比如杠牌是有返回值的)
+	optional int32  v3 = 5;                     //座位号
+
+	optional int32 next_oper_seat_num = 6;		//下一个操作的座位号
+	optional uint32 next_oper_flag = 7;			//下一个操作的信息
+	optional uint32 next_oper_value1 = 8;		//下一个操作的信息
+	optional uint32 next_oper_value2 = 9;		//下一个操作的信息
+}
+
+message qp_mj_oper_error {
+    required uint32 error_type = 1;             //错误的操作类型
+    optional uint32 error_value1 = 2;            //错误的操作值1
+    optional uint32 error_value2 = 3;            //错误的操作值2
+
+    optional uint32 oper_flag = 4;              //正确的可操作类型
+    optional uint32 oper_value1 = 5;            //正确的操作值1
+    optional uint32 oper_value2 = 6;            //正确的操作值2
+}

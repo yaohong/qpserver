@@ -39,8 +39,17 @@ output(Basename, Messages, Options) ->
     BeamFile = filename:dirname(code:which(?MODULE)) ++ "/pokemon_pb.beam",
     {ok,{_,[{abstract_code,{_,Forms}}]}} = beam_lib:chunks(BeamFile, [abstract_code]),
     Forms1 = filter_forms(Messages, Forms, Basename, []),
+    ErlFile = erl_prettypr:format(erl_syntax:form_list(Forms1)),
+    TargetSrcFile =
+        case proplists:get_value(output_src_dir,Options) of
+            undefined ->
+                Basename ++ ".erl";
+            TargetSrcPath ->
+                filename:join(TargetSrcPath, Basename) ++ ".erl"
+        end,
+    ok = file:write_file(TargetSrcFile, ErlFile),
+    io:format("generate erl file to ~p~n",[TargetSrcFile]),
     {ok, _, Bytes, _Warnings} = compile:forms(Forms1, [return]),
-
     TargetBeamFile = 
       case proplists:get_value(output_ebin_dir,Options) of
           undefined ->
@@ -48,6 +57,7 @@ output(Basename, Messages, Options) ->
           TargetBeamPath ->
               filename:join(TargetBeamPath, Basename) ++ ".beam"
       end,
+
     io:format("generate beam file to ~p~n",[TargetBeamFile]),
     ok = file:write_file(TargetBeamFile, Bytes).
 

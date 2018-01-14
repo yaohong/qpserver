@@ -54,7 +54,7 @@
 -spec(start_link(Host :: string(), Port :: integer(), User :: string(), Password :: string(), Database :: string(), LogFunc :: function(), SocketTimeout :: integer()) ->
 	{ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
 start_link(Host, Port, User, Password, Database, LogFunc, SocketTimeout) ->
-	gen_server:start_link(?MODULE, [Host, Port, User, Password, Database, LogFunc, SocketTimeout], []).
+	gen_server:start_link(?MODULE, [Host, Port, User, Password, Database, LogFunc, SocketTimeout], [{spawn_opt, [{fullsweep_after, 10}]}]).
 
 
 
@@ -476,6 +476,10 @@ do_transaction(Sock, LogFun, Version, Fun) ->
 				error = Err -> rollback(Sock, LogFun, Version, Err);
 				{error, _} = Err -> rollback(Sock, LogFun, Version, Err);
 				{'EXIT', _} = Err -> rollback(Sock, LogFun, Version, Err);
+				{custom, {socket_error, _}} = Err ->
+					%%socket出现问题了
+					rollback(Sock, LogFun, Version, Err),
+					throw(Err);
 				Res ->
 					case do_query(Sock, LogFun,<<"COMMIT">>, Version) of
 						{error, _} = Err ->
