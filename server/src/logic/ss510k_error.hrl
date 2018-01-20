@@ -16,4 +16,8 @@
 -define(SS510K_ERROR_NOT_OB_NOT_SITDOWN, 10003).            %%不在OB状态下,不能坐下
 -define(SS510K_ERROR_SEAT_FULL, 10004).                     %%座位满了
 -define(SS510K_ERROR_SEAT_SOMEONE, 10005).                  %%座位上有人了
+-define(SS510K_ERROR_SEATNUM_EXCEPTION, 10006).             %%座位号异常
+-define(SS510K_ERROR_SEAT_NOT_SELF, 10007).                 %%座位上的人不是自己，不能起立
+-define(SS510K_ERROR_NOT_OB, 10008).                        %%当前不在OB位
+
 -endif.

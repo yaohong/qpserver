@@ -33,7 +33,7 @@
 
 -export([
 	join_room/2,
-	sitdown/3
+	sitdown/3, standup/3, exitroom/3
 ]).
 
 
@@ -64,6 +64,13 @@ join_room(RoomPid, UserBasicData) ->
 
 sitdown(RoomPid, UserId, SeatNum) ->
 	gen_fsm:sync_send_event(RoomPid, {sitdown, {UserId, SeatNum}}, infinity).
+
+standup(RoomPid, UserId, SeatNum) ->
+	gen_fsm:sync_send_event(RoomPid, {standup, {UserId, SeatNum}}, infinity).
+
+exitroom(RoomPid, UserId, SeatNum) ->
+	gen_fsm:sync_send_event(RoomPid, {exitroom, {UserId, SeatNum}}, infinity).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -164,11 +171,12 @@ init([RoomId, RoomName, OwnerBasicData, LockIdList, RoomCfg]) ->
 		NewState :: #state{}}).
 wait({join_room, UserBasicData}, _From, State) ->
 	#state{
+		room_id = RoomId,
 		user_basicdata_tree = UserBasicDataTree,
 		ob_set = ObSet,
 		seat_tree = SeatTree
 	} = State,
-	?FILE_LOG_DEBUG("join_room ~p", [UserBasicData]),
+	?FILE_LOG_DEBUG("join_room ~p, room_id=~p", [UserBasicData, RoomId]),
 	UserId = UserBasicData:get(id),
 	case gb_trees:is_defined(UserId, UserBasicDataTree) of
 		true ->
@@ -178,45 +186,40 @@ wait({join_room, UserBasicData}, _From, State) ->
 			NewUserBasicData = gb_trees:insert(UserId, UserBasicData, UserBasicDataTree),
 			NewObSet = gb_sets:insert(UserId, ObSet),
 			%%下发OB选手的信息
-			PbRoomUserDataList =
+			UserDataList =
 				lists:map(
 					fun(ObUserId) ->
 						ObUserBasicData = gb_trees:get(ObUserId, UserBasicDataTree),
-						make_roomuser(ObUserBasicData, -1)
+						{ObUserBasicData, -1}
 					end, gb_sets:to_list(ObSet)),
 			%%下发座位上选手的信息
-			PbRoomUserDataList2 =
+			UserDataList2 =
 				lists:foldl(
 					fun({SeatNum, SeatUserId}, TmpPbRoomUserList) ->
 						if
 							SeatUserId =/= undefined ->
 								SeatUserBasicData = gb_trees:get(SeatUserId, UserBasicDataTree),
-								[make_roomuser(SeatUserBasicData, SeatNum)|TmpPbRoomUserList];
+								[{SeatUserBasicData, SeatNum}|TmpPbRoomUserList];
 							true -> TmpPbRoomUserList
 						end
-					end, PbRoomUserDataList, gb_trees:to_list(SeatTree)),
-			PbJoinRoomRsp = #qp_join_room_rsp{result = 0, room_users = PbRoomUserDataList2},
-			RspPbBin = qp_proto:encode_qp_packet(PbJoinRoomRsp),
-			UserBasicData:send_room_bin(RspPbBin),
+					end, UserDataList, gb_trees:to_list(SeatTree)),
 
 			PbJoinRoomPush = #qp_join_room_push{public_data = make_publicdata(NewUserBasicData)},
 			PushPbBin = qp_proto:encode_qp_packet(PbJoinRoomPush),
+			room_broadcast(UserBasicDataTree, PushPbBin),
 			%%给房间里的其他人发送玩家进入的消息
-			lists:foreach(
-				fun(RoomUserId) ->
-					RoomUserBasicData = gb_trees:get(RoomUserId, UserBasicDataTree),
-					RoomUserBasicData:send_room_bin(PushPbBin)
-				end, gb_trees:keys(UserBasicDataTree)),
-			{reply, success, wait, State#state{user_basicdata_tree = NewUserBasicData, ob_set = NewObSet}}
+			{reply, {success, UserDataList2}, wait, State#state{user_basicdata_tree = NewUserBasicData, ob_set = NewObSet}}
 	end;
-wait({sitdown, {sitdown, {UserId, SeatNum}}}, _From, State) ->
+wait({sitdown, {UserId, SeatNum}}, _From, State) ->
 	#state{
+		room_id = RoomId,
+		lock_id_list = LockIdList,
 		user_basicdata_tree = UserBasicDataTree,
 		ob_set = ObSet,
 		seat_tree = SeatTree,
 		room_cfg = RoomCfg
 	} = State,
-	?FILE_LOG_DEBUG("sitdown user_id=~p seat_num=~p", [UserId, SeatNum]),
+	?FILE_LOG_DEBUG("sitdown user_id=~p seat_num=~p, room_id=~p", [UserId, SeatNum, RoomId]),
 	case gb_trees:lookup(UserId, UserBasicDataTree) of
 		none ->
 			{reply, {failed, ?SS510K_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
@@ -225,17 +228,98 @@ wait({sitdown, {sitdown, {UserId, SeatNum}}}, _From, State) ->
 				false ->
 					{reply, {failed, ?SS510K_ERROR_NOT_OB_NOT_SITDOWN}, wait, State};
 				true ->
-					case select_seatnum(SeatTree, UserId, SeatNum, RoomCfg:get(is_random)) of
+					case select_seatnum(SeatTree, UserId, SeatNum, RoomCfg:get(is_random), LockIdList) of
 						{_, ErrorCode} when ErrorCode > 0 ->
 							{reply, {failed, ErrorCode}, wait, State};
-						{NewSeatTree, SelectSeatNum, _} ->
-							{reply, {success, SelectSeatNum}, wait, State#state{seat_tree = NewSeatTree}}
+						{NewSeatTree, SelectSeatNum, 0} ->
+							%%如果四个座位全满了，则游戏开始
+							{reply, {success, SelectSeatNum}, wait, State#state{seat_tree = NewSeatTree, ob_set = gb_sets:delete(UserId, ObSet)}}
 					end
 			end
 	end;
-wait(_Event, _From, State) ->
-	Reply = ok,
-	{reply, Reply, state_name, State}.
+wait({standup, {UserId, SeatNum}}, _From, State) ->
+	#state{
+		room_id = RoomId,
+		user_basicdata_tree = UserBasicDataTree,
+		ob_set = ObSet,
+		seat_tree = SeatTree
+	} = State,
+	?FILE_LOG_DEBUG("standup user_id=~p, seat_num=~p, room_id=~p", [UserId, SeatNum, RoomId]),
+	case gb_trees:lookup(UserId, UserBasicDataTree) of
+		none ->
+			{reply, {failed, ?SS510K_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
+		{value, _} ->
+			case gb_trees:lookup(SeatNum, SeatTree) of
+				{value, UserId} ->
+					%%可以起立
+					NewSeatTree = gb_trees:update(SeatNum, undefined, SeatTree),
+					NewObSet = gb_sets:insert(UserId, ObSet),
+
+					PbPush = #qp_standup_push{seat_num = SeatNum},
+					%%给其他人广播我起立的消息(过滤掉自己)
+					room_broadcast(UserBasicDataTree, qp_proto:encode_qp_packet(PbPush), UserId),
+
+					{reply, success, wait, State#state{ob_set = NewObSet, seat_tree = NewSeatTree}};
+				{value, OtherUserId} ->
+					?FILE_LOG_WARNING("standup_failed, other_user_id ~p", [OtherUserId]),
+					{reply, {failed, ?SS510K_ERROR_SEAT_NOT_SELF}, wait, State};
+				none ->
+					%%座位号异常
+					?FILE_LOG_WARNING("standup_failed, exception_seat_num ~p", [SeatNum]),
+					{reply, {failed, ?SS510K_ERROR_SEATNUM_EXCEPTION}, wait, State}
+			end
+	end;
+wait({exitroom, {UserId, SeatNum}}, _From, State) ->
+	#state{
+		room_id = RoomId,
+		user_basicdata_tree = UserBasicDataTree,
+		ob_set = ObSet,
+		seat_tree = SeatTree
+	} = State,
+	?FILE_LOG_DEBUG("exitroom user_id=~p, seat_num=~p, room_id=~p", [UserId, SeatNum, RoomId]),
+	case gb_trees:lookup(UserId, UserBasicDataTree) of
+		none ->
+			{reply, {failed, ?SS510K_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
+		{value, _} ->
+			if
+				SeatNum =:= -1 ->
+					%%从OB位退出
+					case gb_sets:is_element(UserId, ObSet) of
+						false ->
+							%%当前并不在ob位
+							{reply, {failed, ?SS510K_ERROR_NOT_OB}, wait, State};
+						true ->
+							NewObSet = gb_sets:delete(UserId, ObSet),
+							NewUserBasicDataTree = gb_trees:delete(UserId, UserBasicDataTree),
+
+							%%给其他人广播玩家退出房间的消息
+							PbPush = #qp_exit_room_push{user_id = UserId},
+							room_broadcast(NewUserBasicDataTree, qp_proto:encode_qp_packet(PbPush)),
+
+							{reply, success, wait, State#state{ob_set = NewObSet, user_basicdata_tree = NewUserBasicDataTree}}
+					end;
+				true ->
+					%%从座位上退出
+					case gb_trees:lookup(SeatNum, SeatTree) of
+						{value, UserId} ->
+							NewSeatTree = gb_trees:update(SeatNum, undefined, SeatTree),
+							NewUserBasicDataTree = gb_trees:delete(UserId, UserBasicDataTree),
+							PbPush = #qp_exit_room_push{user_id = UserId},
+							room_broadcast(NewUserBasicDataTree, qp_proto:encode_qp_packet(PbPush)),
+							{reply, success, wait, State#state{seat_tree = NewSeatTree, user_basicdata_tree = NewUserBasicDataTree}};
+						{value, OtherUserId} ->
+							?FILE_LOG_WARNING("exitroom_failed, other_user_id ~p", [OtherUserId]),
+							{reply, {failed, ?SS510K_ERROR_SEAT_NOT_SELF}, wait, State};
+						none ->
+							%%座位号异常
+							?FILE_LOG_WARNING("exitroom_failed, exception_seat_num ~p", [SeatNum]),
+							{reply, {failed, ?SS510K_ERROR_SEATNUM_EXCEPTION}, wait, State}
+					end
+			end
+	end;
+wait(Event, _From, State) ->
+	?FILE_LOG_DEBUG("wait, ~p", Event),
+	{reply, ignore, wait, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -342,7 +426,44 @@ make_publicdata(UserBasicData) ->
 
 
 
-
+select_seatnum(SeatTree, UserId, SeatNum, IsRandom, LockIdList) ->
+	%%计算能够坐下的剩余位置
+	if
+		LockIdList =:= [] ->
+			select_seatnum(SeatTree, UserId, SeatNum, IsRandom);
+		true ->
+			case lists:member(UserId, LockIdList) of
+				true ->
+					%%在锁定列表里
+					select_seatnum(SeatTree, UserId, SeatNum, IsRandom);
+				false ->
+					LockIdCount = length(LockIdList),
+					%%不在锁定列表里
+					if
+						LockIdCount =:= 4 ->
+							{SeatTree, ?SS510K_ERROR_SEAT_FULL};
+						true ->
+							AvailableSeatCount =
+								lists:foldr(
+									fun(TmpUserId, TmpAvailableSeatCount) ->
+										if
+											TmpUserId =:= undefined -> TmpAvailableSeatCount;
+											true ->
+												case lists:member(TmpUserId, LockIdList) of
+													true -> TmpAvailableSeatCount;
+													false ->  TmpAvailableSeatCount - 1
+												end
+										end
+									end, 4 - LockIdCount, gb_trees:values(SeatTree)),
+							if
+								AvailableSeatCount > 0 ->
+									select_seatnum(SeatTree, UserId, SeatNum, IsRandom);
+								true -> {SeatTree, ?SS510K_ERROR_SEAT_FULL}
+							end
+					end
+			end
+	end,
+	ok.
 select_seatnum(SeatTree, UserId, SeatNum, IsRandom) when IsRandom =:= true orelse (SeatNum < 0 andalso SeatNum > 3) ->
 	%%随机选择
 	case random_select_seatnum(SeatTree) of
@@ -371,3 +492,18 @@ random_select_seatnum(SeatTree) ->
 			Index = qp_util:random_in_range(1, length(LL)),
 			lists:nth(Index, LL)
 	end.
+
+room_broadcast(UserBasicDataTree, Bin) ->
+	lists:foreach(
+		fun(RoomUserBasicData) ->
+			RoomUserBasicData:send_room_bin(Bin)
+		end, gb_trees:values(UserBasicDataTree)).
+
+room_broadcast(UserBasicDataTree, Bin, FilterUserId) ->
+	lists:foreach(
+		fun(RoomUserBasicData) ->
+			case RoomUserBasicData:get(id) of
+				FilterUserId -> ok;
+				_ -> RoomUserBasicData:send_room_bin(Bin)
+			end
+		end, gb_trees:values(UserBasicDataTree)).

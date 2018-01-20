@@ -4,122 +4,198 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created : 12. 一月 2018 22:02
+%%% Created : 15. 一月 2018 12:10
 %%%-------------------------------------------------------------------
 -module(ss510k_user).
 -author("yaohong").
--include("ss510k_user.hrl").
--include("ss510k.hrl").
+
+-behaviour(gen_fsm).
+
 %% API
--export(
-	[
-		create_user/2,
-		clientcard_prehandle/1
-	]
-).
--export([
-	is_replace_card/1,
-	clear_laizi_mark/1
-]).
+-export([start_link/0]).
 
--export([
-	test_clientcard_prehandle/1,
-	calc_score/1,
-	calc_cardtype_score/1
-]).
+%% gen_fsm callbacks
+-export([init/1,
+	state_name/2,
+	state_name/3,
+	handle_event/3,
+	handle_sync_event/4,
+	handle_info/3,
+	terminate/3,
+	code_change/4]).
 
+-define(SERVER, ?MODULE).
 
-test_clientcard_prehandle(CardList) ->
-	L =
-	lists:map(
-		fun({IsLaizi, Color, Value}) ->
-			V = IsLaizi bsl 15,
-			Card = ss510k_util:generate_card({Color, Value}),
-			V bor Card
-		end, CardList),
-	{ClearReplaceCardList, Score, ReplaceCardList} = clientcard_prehandle(L),
-	S = ss510k_card_type:format_laizi_replace_info(ReplaceCardList),
-	ss510k_card_type:print_playcard_type(ss510k_card_type:get_playcard_type(ClearReplaceCardList)),
-	io:format("score=~p, ~ts", [Score, S]).
+-record(state, {}).
 
+%%%===================================================================
+%%% API
+%%%===================================================================
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Creates a gen_fsm process which calls Module:init/1 to
+%% initialize. To ensure a synchronized start-up procedure, this
+%% function does not return until Module:init/1 has returned.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(start_link() -> {ok, pid()} | ignore | {error, Reason :: term()}).
+start_link() ->
+	gen_fsm:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+%%%===================================================================
+%%% gen_fsm callbacks
+%%%===================================================================
 
-is_replace_card(ClientCard) ->
-	(ClientCard bsr 15) =:= 1.
-clear_laizi_mark(ClientCard) ->
-	ClientCard band 2#011111111111111.
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Whenever a gen_fsm is started using gen_fsm:start/[3,4] or
+%% gen_fsm:start_link/[3,4], this function is called by the new
+%% process to initialize.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(init(Args :: term()) ->
+	{ok, StateName :: atom(), StateData :: #state{}} |
+	{ok, StateName :: atom(), StateData :: #state{}, timeout() | hibernate} |
+	{stop, Reason :: term()} | ignore).
+init([]) ->
+	{ok, state_name, #state{}}.
 
-create_user(SeatNumber, HandCardList) when is_integer(SeatNumber) andalso is_list(HandCardList) ->
-	#ss510k_user{
-		seat_number = SeatNumber,
-		hand_card_list = HandCardList,
-		the_card_list1 = [],
-		the_card_list2 = [],
-		current_score = 0,
-		total_score = 0
-	}.
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% There should be one instance of this function for each possible
+%% state name. Whenever a gen_fsm receives an event sent using
+%% gen_fsm:send_event/2, the instance of this function with the same
+%% name as the current state name StateName is called to handle
+%% the event. It is also called if a timeout occurs.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(state_name(Event :: term(), State :: #state{}) ->
+	{next_state, NextStateName :: atom(), NextState :: #state{}} |
+	{next_state, NextStateName :: atom(), NextState :: #state{},
+		timeout() | hibernate} |
+	{stop, Reason :: term(), NewState :: #state{}}).
+state_name(_Event, State) ->
+	{next_state, state_name, State}.
 
-%%客户端出牌里不会直接有癞子(除非四大天王)，只有癞子替换之后的牌(如果是癞子代的牌,则最高位为1，高八位的低七位表示花色,低8表示卡牌值)
-clientcard_prehandle(ClientCardList) ->
-	%%查找代牌
-	{ClearReplaceCardList, ServerCardList, ReplaceCardList} = find_replace_card(ClientCardList),
-	%%根据ClearReplaceCardList来获取牌型
-	%%根据ServerCardList来将手牌里的牌移除掉和计算分值
-	%%ReplaceCardList 为癞子替换的牌
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% There should be one instance of this function for each possible
+%% state name. Whenever a gen_fsm receives an event sent using
+%% gen_fsm:sync_send_event/[2,3], the instance of this function with
+%% the same name as the current state name StateName is called to
+%% handle the event.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(state_name(Event :: term(), From :: {pid(), term()},
+	State :: #state{}) ->
+	{next_state, NextStateName :: atom(), NextState :: #state{}} |
+	{next_state, NextStateName :: atom(), NextState :: #state{},
+		timeout() | hibernate} |
+	{reply, Reply, NextStateName :: atom(), NextState :: #state{}} |
+	{reply, Reply, NextStateName :: atom(), NextState :: #state{},
+		timeout() | hibernate} |
+	{stop, Reason :: normal | term(), NewState :: #state{}} |
+	{stop, Reason :: normal | term(), Reply :: term(),
+		NewState :: #state{}}).
+state_name(_Event, _From, State) ->
+	Reply = ok,
+	{reply, Reply, state_name, State}.
 
-	%%计算本次出牌的分值(5, 10, K) + 加上炸弹本身的分值
-	CardScore = ss510k_user:calc_score(ServerCardList),
-	%%获取牌型的分值
-	CardTypeScore = ss510k_user:calc_cardtype_score(ClearReplaceCardList),
-	{ClearReplaceCardList, ServerCardList, CardScore + CardTypeScore, ReplaceCardList}.
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Whenever a gen_fsm receives an event sent using
+%% gen_fsm:send_all_state_event/2, this function is called to handle
+%% the event.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(handle_event(Event :: term(), StateName :: atom(),
+	StateData :: #state{}) ->
+	{next_state, NextStateName :: atom(), NewStateData :: #state{}} |
+	{next_state, NextStateName :: atom(), NewStateData :: #state{},
+		timeout() | hibernate} |
+	{stop, Reason :: term(), NewStateData :: #state{}}).
+handle_event(_Event, StateName, State) ->
+	{next_state, StateName, State}.
 
-%%查找癞子替换的牌
-find_replace_card(ClientCardList) ->
-	find_replace_card(ClientCardList, [], [], []).
-find_replace_card([], ClearReplaceCardList, ServerCardList, ReplaceCardList) ->
-	{lists:reverse(ClearReplaceCardList), lists:reverse(ServerCardList), ReplaceCardList};
-find_replace_card([ClientCard|T], ClearReplaceCardList, ServerCardList, ReplaceCardList) ->
-	IsReplaceCard = ss510k_user:is_replace_card(ClientCard),
-	if
-		IsReplaceCard =:= true ->
-			%%是癞子替换的牌
-			ServerCard = ss510k_user:clear_laizi_mark(ClientCard),
-			find_replace_card(T, [ServerCard|ClearReplaceCardList], [ss510k_util:generate_card(?COLOR_LAIZI, ?VALUE_LAIZI)|ServerCardList], [ServerCard|ReplaceCardList]);
-		IsReplaceCard =:= false ->
-			find_replace_card(T, [ClientCard|ClearReplaceCardList], [ClientCard|ServerCardList], ReplaceCardList)
-	end.
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Whenever a gen_fsm receives an event sent using
+%% gen_fsm:sync_send_all_state_event/[2,3], this function is called
+%% to handle the event.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(handle_sync_event(Event :: term(), From :: {pid(), Tag :: term()},
+	StateName :: atom(), StateData :: term()) ->
+	{reply, Reply :: term(), NextStateName :: atom(), NewStateData :: term()} |
+	{reply, Reply :: term(), NextStateName :: atom(), NewStateData :: term(),
+		timeout() | hibernate} |
+	{next_state, NextStateName :: atom(), NewStateData :: term()} |
+	{next_state, NextStateName :: atom(), NewStateData :: term(),
+		timeout() | hibernate} |
+	{stop, Reason :: term(), Reply :: term(), NewStateData :: term()} |
+	{stop, Reason :: term(), NewStateData :: term()}).
+handle_sync_event(_Event, _From, StateName, State) ->
+	Reply = ok,
+	{reply, Reply, StateName, State}.
 
-calc_score(ServerCardList) ->
-	calc_score(ServerCardList, 0).
-calc_score([], Score) -> Score;
-calc_score([ServerCard|T], TotalScore) ->
-	CardScore =
-		case ss510k_util:parse_card(ServerCard) of
-			{_, ?VALUE_5} -> 5;
-			{_, ?VALUE_10} -> 10;
-			{_, ?VALUE_K} -> 10;
-			_ -> 0
-		end,
-	calc_score(T, TotalScore + CardScore).
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% This function is called by a gen_fsm when it receives any
+%% message other than a synchronous or asynchronous event
+%% (or a system message).
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(handle_info(Info :: term(), StateName :: atom(),
+	StateData :: term()) ->
+	{next_state, NextStateName :: atom(), NewStateData :: term()} |
+	{next_state, NextStateName :: atom(), NewStateData :: term(),
+		timeout() | hibernate} |
+	{stop, Reason :: normal | term(), NewStateData :: term()}).
+handle_info(_Info, StateName, State) ->
+	{next_state, StateName, State}.
 
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% This function is called by a gen_fsm when it is about to
+%% terminate. It should be the opposite of Module:init/1 and do any
+%% necessary cleaning up. When it returns, the gen_fsm terminates with
+%% Reason. The return value is ignored.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(terminate(Reason :: normal | shutdown | {shutdown, term()}
+| term(), StateName :: atom(), StateData :: term()) -> term()).
+terminate(_Reason, _StateName, _State) ->
+	ok.
 
-calc_cardtype_score(ClearReplaceCardList) ->
-	case ss510k_card_type:get_playcard_type(ClearReplaceCardList) of
-		{?CARD_DAN, _} -> 0;
-		{?CARD_DUI, _} -> 0;
-		{?CARD_SAN, _} -> 0;
-		{?CARD_510K, _} -> 0;
-		{?CARD_BOMB, {_, Count}} ->
-			if
-				Count =:= 4 -> 0;
-				Count =:= 5 -> 200;
-				Count =:= 6 -> 500;
-				Count =:= 7 -> 1500;
-				Count =:= 8 -> 3000;
-				Count =:= 9 -> 6000;
-				Count =:= 10 -> 12000
-			end;
-		{?CARD_TIANWANG, _} -> 1500
-	end.
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Convert process state when code is changed
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec(code_change(OldVsn :: term() | {down, term()}, StateName :: atom(),
+	StateData :: #state{}, Extra :: term()) ->
+	{ok, NextStateName :: atom(), NewStateData :: #state{}}).
+code_change(_OldVsn, StateName, State, _Extra) ->
+	{ok, StateName, State}.
 
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================

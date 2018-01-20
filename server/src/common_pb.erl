@@ -50,7 +50,7 @@
 
 -record(qp_standup_req, {noop}).
 
--record(qp_sitdown_push, {seat_num, public_data}).
+-record(qp_sitdown_push, {seat_num, user_id}).
 
 -record(qp_sitdown_rsp, {result}).
 
@@ -69,8 +69,9 @@
 -record(qp_create_room_req, {cfg}).
 
 -record(pb_room_cfg,
-	{double_down_score, is_laizi_playmethod, is_ob,
-	 is_random, is_not_voice, is_safe_mode}).
+	{room_name, is_aa, double_down_score,
+	 is_laizi_playmethod, is_ob, is_random, is_not_voice,
+	 is_safe_mode}).
 
 -record(qp_login_rsp,
 	{state, public_data, private_data}).
@@ -223,23 +224,29 @@ encode(qp_login_rsp, Record) ->
 			   pb_user_private_data, [])]);
 encode(pb_room_cfg, Record) ->
     iolist_to_binary([pack(1, required,
+			   with_default(Record#pb_room_cfg.room_name, none),
+			   string, []),
+		      pack(2, required,
+			   with_default(Record#pb_room_cfg.is_aa, none), bool,
+			   []),
+		      pack(3, required,
 			   with_default(Record#pb_room_cfg.double_down_score,
 					none),
 			   int32, []),
-		      pack(2, required,
+		      pack(4, required,
 			   with_default(Record#pb_room_cfg.is_laizi_playmethod,
 					none),
 			   bool, []),
-		      pack(3, required,
+		      pack(5, required,
 			   with_default(Record#pb_room_cfg.is_ob, none), bool,
 			   []),
-		      pack(4, required,
+		      pack(6, required,
 			   with_default(Record#pb_room_cfg.is_random, none),
 			   bool, []),
-		      pack(5, required,
+		      pack(7, required,
 			   with_default(Record#pb_room_cfg.is_not_voice, none),
 			   bool, []),
-		      pack(6, required,
+		      pack(8, required,
 			   with_default(Record#pb_room_cfg.is_safe_mode, none),
 			   bool, [])]);
 encode(qp_create_room_req, Record) ->
@@ -254,7 +261,7 @@ encode(qp_create_room_rsp, Record) ->
 			   with_default(Record#qp_create_room_rsp.room_id,
 					none),
 			   int32, []),
-		      pack(3, required,
+		      pack(3, optional,
 			   with_default(Record#qp_create_room_rsp.cfg, none),
 			   pb_room_cfg, [])]);
 encode(qp_join_room_req, Record) ->
@@ -295,9 +302,8 @@ encode(qp_sitdown_push, Record) ->
 			   with_default(Record#qp_sitdown_push.seat_num, none),
 			   int32, []),
 		      pack(2, required,
-			   with_default(Record#qp_sitdown_push.public_data,
-					none),
-			   pb_user_public_data, [])]);
+			   with_default(Record#qp_sitdown_push.user_id, none),
+			   int32, [])]);
 encode(qp_standup_req, Record) ->
     iolist_to_binary([pack(1, optional,
 			   with_default(Record#qp_standup_req.noop, none),
@@ -459,11 +465,12 @@ decode(qp_login_rsp, Bytes) when is_binary(Bytes) ->
     Decoded = decode(Bytes, Types, []),
     to_record(qp_login_rsp, Decoded);
 decode(pb_room_cfg, Bytes) when is_binary(Bytes) ->
-    Types = [{6, is_safe_mode, bool, []},
-	     {5, is_not_voice, bool, []}, {4, is_random, bool, []},
-	     {3, is_ob, bool, []},
-	     {2, is_laizi_playmethod, bool, []},
-	     {1, double_down_score, int32, []}],
+    Types = [{8, is_safe_mode, bool, []},
+	     {7, is_not_voice, bool, []}, {6, is_random, bool, []},
+	     {5, is_ob, bool, []},
+	     {4, is_laizi_playmethod, bool, []},
+	     {3, double_down_score, int32, []}, {2, is_aa, bool, []},
+	     {1, room_name, string, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(pb_room_cfg, Decoded);
 decode(qp_create_room_req, Bytes)
@@ -508,8 +515,7 @@ decode(qp_sitdown_rsp, Bytes) when is_binary(Bytes) ->
     Decoded = decode(Bytes, Types, []),
     to_record(qp_sitdown_rsp, Decoded);
 decode(qp_sitdown_push, Bytes) when is_binary(Bytes) ->
-    Types = [{2, public_data, pb_user_public_data,
-	      [is_record]},
+    Types = [{2, user_id, int32, []},
 	     {1, seat_num, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(qp_sitdown_push, Decoded);

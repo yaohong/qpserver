@@ -14,15 +14,13 @@
 -include("qp_type.hrl").
 -include("../deps/file_log/include/file_log.hrl").
 -include("./proto/qp_proto.hrl").
+-include("../include/common_pb.hrl").
 %% API
 
 %% gen_fsm callbacks
 -export([init/1,
 	wait_login/2,              	%%等待登陆
-	hall/2,                    	%%大厅
-	room/2,              		%%创建房间/进入房间后 => 房间
-	game/2,                    	%%游戏
-	watch/2,					%%观看
+	login_success/2,              %%登陆成功
 	handle_event/3,
 	handle_sync_event/4,
 	handle_info/3,
@@ -39,7 +37,7 @@
 ]).
 -define(SERVER, ?MODULE).
 -define(TIMER_SPACE, 3).
--define(RECV_TIMEOUT, 10).
+-define(RECV_TIMEOUT, 30).
 
 -record(state, {
 	receiveMonitor,
@@ -145,22 +143,9 @@ wait_login(Event, State) ->
 	{next_state, wait_login, State}.
 
 
-hall(Event, State) ->
+login_success(Event, State) ->
 	?FILE_LOG_WARNING("~p ~p", [Event, State]),
 	{next_state, hall, State}.
-
-
-room(Event, State) ->
-	?FILE_LOG_WARNING("~p ~p", [Event, State]),
-	{next_state, room, State}.
-
-game(Event, State) ->
-	?FILE_LOG_WARNING("~p", [Event]),
-	{next_state, game, State}.
-
-watch(Event, State) ->
-	?FILE_LOG_WARNING("~p", [Event]),
-	{next_state, game, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -226,10 +211,8 @@ handle_event(_Event, StateName, State) ->
 	{next_state, StateName, State}.
 
 state_name_check(wait_login) -> ok;
-state_name_check(hall) -> ok;
-state_name_check(room) -> ok;
-state_name_check(game) -> ok;
-state_name_check(watch) -> ok.
+state_name_check(login_success) -> ok.
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -277,6 +260,7 @@ handle_info(timeout_check, StateName, #state{last_recv_packet_time = LastRecvPac
 	SpacheTime = CurrentTime - LastRecvPackTime,
 	if
 		SpacheTime > ?RECV_TIMEOUT ->
+			?FILE_LOG_DEBUG("timeout stat_name=~p", [StateName]),
 			{stop,normal,State};
 		true ->
 			timer_manager:addDelayTask(
@@ -331,5 +315,31 @@ send_bin(Bin, State) when is_binary(Bin) andalso is_record(State, state)->
 
 
 
-packet_handle(_P1, _P2, _P3) -> ok.
+packet_handle(#qp_login_req{account = Acc, pwd = Pwd}, wait_login, State) ->
+	?FILE_LOG_DEBUG("login_req acc=~p, pwd=~p", [Acc, Pwd]),
+	PublicData = #pb_user_public_data{user_id = 10000, nick_name = unicode:characters_to_binary("石头哥哥"), avatar_url = "http://www.baidu.com"},
+	PrivateData = #pb_user_private_data{room_card_count = 100},
+	Rsp = #qp_login_rsp{state = 0, public_data = PublicData, private_data = PrivateData},
+	send_packet(Rsp, State),
+	{login_success, State, true};
+packet_handle(Req, wait_login, _State) ->
+	?FILE_LOG_DEBUG("wait_login, req=~p", [Req]),
+	throw({custom, state_error});
+
+packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, State) ->
+	#pb_room_cfg{
+		room_name = RoomName,
+		is_aa = AA,
+		double_down_score = DoubleDownScore,
+		is_laizi_playmethod = IsLaiziPlaymethod,
+		is_ob = IsOb,
+		is_random = IsRandom,
+		is_not_voice = IsNotVoice,
+		is_safe_mode = IsSafeMode
+	} = RoomCfg,
+
+	?FILE_LOG_DEBUG("room_name=~ts, is_aa=~p, double_down_score=~p, is_laizi_playmethod=~p, is_ob=~p, is_random=~p, is_not_voice=~p, is_safe_mode=~p",
+		[RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode]),
+	{login_success, State, true}.
+
 
