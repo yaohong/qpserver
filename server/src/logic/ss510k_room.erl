@@ -8,13 +8,13 @@
 %%%-------------------------------------------------------------------
 -module(ss510k_room).
 -author("yaohong").
--include("ss510k_error.hrl").
+-include("../qp_error.hrl").
 -include("../../deps/file_log/include/file_log.hrl").
 -include("../../include/common_pb.hrl").
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/5]).
+-export([start/3, start_link/3]).
 
 %% gen_fsm callbacks
 -export([init/1,
@@ -41,11 +41,8 @@
 -define(CHECK_GAME_WHETHER_TO_START_TIMEOUT, 10 * 60).
 -record(state, {
 	room_id :: integer(),
-	room_name :: list(),
-	owner_id :: integer(),
-	lock_id_list :: list(),                 %%只允许这些人进房
+	owner_basic_data :: integer(),
 	room_cfg :: any(),
-
 
 	ob_set :: gb_sets:set(),                %%存放观众的集合
 
@@ -84,9 +81,15 @@ cb_check_game_whethertostart(_Ref, Pid) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(start_link(RoomId :: integer(), RoomName :: list(), OwnerId :: integer(), LockIdList :: [integer()], RoomCfg :: any()) -> {ok, pid()} | ignore | {error, Reason :: term()}).
-start_link(RoomId, RoomName, OwnerId, LockIdList, RoomCfg) ->
-	gen_fsm:start_link(?MODULE, [RoomId, RoomName, OwnerId, LockIdList, RoomCfg], []).
+
+
+start(RoomId, OwnerBasicData, RoomCfg) ->
+	supervisor:start_child(room_sup, [RoomId, OwnerBasicData, RoomCfg]).
+
+
+-spec(start_link(RoomId :: integer(), OwnerBasicData :: term(), RoomCfg :: any()) -> {ok, pid()} | ignore | {error, Reason :: term()}).
+start_link(RoomId, OwnerBasicData, RoomCfg) ->
+	gen_fsm:start_link(?MODULE, [RoomId, OwnerBasicData, RoomCfg], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -105,12 +108,11 @@ start_link(RoomId, RoomName, OwnerId, LockIdList, RoomCfg) ->
 	{ok, StateName :: atom(), StateData :: #state{}} |
 	{ok, StateName :: atom(), StateData :: #state{}, timeout() | hibernate} |
 	{stop, Reason :: term()} | ignore).
-init([RoomId, RoomName, OwnerBasicData, LockIdList, RoomCfg]) ->
+init([RoomId, OwnerBasicData, RoomCfg]) ->
 	%%启动定时器，多久没开始游戏，自动退出
 	CurrentTime = qp_util:timestamp(),
 	timer_manager:addDelayTask(RoomId, CurrentTime + ?CHECK_GAME_WHETHER_TO_START_TIMEOUT, ?MODULE, cb_check_game_whethertostart, [self()]),
-	Id = OwnerBasicData:get(id),
-	?FILE_LOG_DEBUG("room_init room_id=~p, room_name=~ts, owner_id=~p, lock_id_list=~p, room_cfg=~p", [RoomId, RoomName, Id, LockIdList, RoomCfg]),
+	?FILE_LOG_DEBUG("room_init room_id=~p, owner_basic_data=~p, room_cfg=~p", [RoomId, OwnerBasicData, RoomCfg]),
 	T1 = gb_trees:insert(0, undefined, gb_trees:empty()),
 	T2 = gb_trees:insert(1, undefined, T1),
 	T3 = gb_trees:insert(2, undefined, T2),
@@ -119,12 +121,10 @@ init([RoomId, RoomName, OwnerBasicData, LockIdList, RoomCfg]) ->
 		wait,
 		#state{
 			room_id = RoomId,
-			room_name = RoomName,
-			owner_id = Id,
-			lock_id_list = LockIdList,
+			owner_basic_data = OwnerBasicData,
 			room_cfg = RoomCfg,
-			ob_set = gb_sets:insert(Id, gb_sets:empty()),
-			user_basicdata_tree = gb_trees:insert(Id, OwnerBasicData, gb_trees:empty()),
+			ob_set = gb_sets:empty(),
+			user_basicdata_tree = gb_trees:empty(),
 			seat_tree = T4
 		}}.
 
@@ -169,7 +169,7 @@ init([RoomId, RoomName, OwnerBasicData, LockIdList, RoomCfg]) ->
 	{stop, Reason :: normal | term(), NewState :: #state{}} |
 	{stop, Reason :: normal | term(), Reply :: term(),
 		NewState :: #state{}}).
-wait({join_room, UserBasicData}, _From, State) ->
+wait({join_room, UserBasicData}, _From, #state{room_cfg = RoomCfg} = State) ->
 	#state{
 		room_id = RoomId,
 		user_basicdata_tree = UserBasicDataTree,
@@ -181,9 +181,9 @@ wait({join_room, UserBasicData}, _From, State) ->
 	case gb_trees:is_defined(UserId, UserBasicDataTree) of
 		true ->
 			%%之前已经在里面了
-			{reply, {failed, ?SS510K_ERROR_REPEAT_JOIN}, wait, State};
+			{reply, {failed, ?LOGIC_ERROR_REPEAT_JOIN}, wait, State};
 		false ->
-			NewUserBasicData = gb_trees:insert(UserId, UserBasicData, UserBasicDataTree),
+			NewUserBasicDataTree = gb_trees:insert(UserId, UserBasicData, UserBasicDataTree),
 			NewObSet = gb_sets:insert(UserId, ObSet),
 			%%下发OB选手的信息
 			UserDataList =
@@ -204,16 +204,28 @@ wait({join_room, UserBasicData}, _From, State) ->
 						end
 					end, UserDataList, gb_trees:to_list(SeatTree)),
 
-			PbJoinRoomPush = #qp_join_room_push{public_data = make_publicdata(NewUserBasicData)},
+			%%给房间里的其他人发送玩家进入的消息
+			PbJoinRoomPush = #qp_join_room_push{public_data = make_publicdata(UserBasicData)},
 			PushPbBin = qp_proto:encode_qp_packet(PbJoinRoomPush),
 			room_broadcast(UserBasicDataTree, PushPbBin),
-			%%给房间里的其他人发送玩家进入的消息
-			{reply, {success, UserDataList2}, wait, State#state{user_basicdata_tree = NewUserBasicData, ob_set = NewObSet}}
+			%%给自己发送房间里其他玩家的信息
+			AllRoomUsers =
+				lists:map(
+					fun({TmpUserBasicData, TmpSeatNum}) ->
+						make_roomuser(TmpUserBasicData, TmpSeatNum)
+					end, UserDataList2),
+			PbRoomData = #pb_room_data{cfg = make_roomcfg(RoomCfg),room_users = AllRoomUsers, game_data = undefined},
+			PbJoinRoomRsp =
+				#qp_join_room_rsp{
+					result = 0,
+					room_data = PbRoomData},
+			PbJoinRoomRspBin = qp_proto:encode_qp_packet(PbJoinRoomRsp),
+			UserBasicData:send_room_bin(PbJoinRoomRspBin),
+			{reply, success, wait, State#state{user_basicdata_tree = NewUserBasicDataTree, ob_set = NewObSet}}
 	end;
 wait({sitdown, {UserId, SeatNum}}, _From, State) ->
 	#state{
 		room_id = RoomId,
-		lock_id_list = LockIdList,
 		user_basicdata_tree = UserBasicDataTree,
 		ob_set = ObSet,
 		seat_tree = SeatTree,
@@ -222,13 +234,13 @@ wait({sitdown, {UserId, SeatNum}}, _From, State) ->
 	?FILE_LOG_DEBUG("sitdown user_id=~p seat_num=~p, room_id=~p", [UserId, SeatNum, RoomId]),
 	case gb_trees:lookup(UserId, UserBasicDataTree) of
 		none ->
-			{reply, {failed, ?SS510K_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
+			{reply, {failed, ?LOGIC_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
 		{value, _} ->
 			case gb_sets:is_element(UserId, ObSet) of
 				false ->
-					{reply, {failed, ?SS510K_ERROR_NOT_OB_NOT_SITDOWN}, wait, State};
+					{reply, {failed, ?LOGIC_ERROR_NOT_OB_NOT_SITDOWN}, wait, State};
 				true ->
-					case select_seatnum(SeatTree, UserId, SeatNum, RoomCfg:get(is_random), LockIdList) of
+					case select_seatnum(SeatTree, UserId, SeatNum, RoomCfg:get(is_random), RoomCfg:get(lock_id_list)) of
 						{_, ErrorCode} when ErrorCode > 0 ->
 							{reply, {failed, ErrorCode}, wait, State};
 						{NewSeatTree, SelectSeatNum, 0} ->
@@ -247,7 +259,7 @@ wait({standup, {UserId, SeatNum}}, _From, State) ->
 	?FILE_LOG_DEBUG("standup user_id=~p, seat_num=~p, room_id=~p", [UserId, SeatNum, RoomId]),
 	case gb_trees:lookup(UserId, UserBasicDataTree) of
 		none ->
-			{reply, {failed, ?SS510K_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
+			{reply, {failed, ?LOGIC_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
 		{value, _} ->
 			case gb_trees:lookup(SeatNum, SeatTree) of
 				{value, UserId} ->
@@ -262,11 +274,11 @@ wait({standup, {UserId, SeatNum}}, _From, State) ->
 					{reply, success, wait, State#state{ob_set = NewObSet, seat_tree = NewSeatTree}};
 				{value, OtherUserId} ->
 					?FILE_LOG_WARNING("standup_failed, other_user_id ~p", [OtherUserId]),
-					{reply, {failed, ?SS510K_ERROR_SEAT_NOT_SELF}, wait, State};
+					{reply, {failed, ?LOGIC_ERROR_SEAT_NOT_SELF}, wait, State};
 				none ->
 					%%座位号异常
 					?FILE_LOG_WARNING("standup_failed, exception_seat_num ~p", [SeatNum]),
-					{reply, {failed, ?SS510K_ERROR_SEATNUM_EXCEPTION}, wait, State}
+					{reply, {failed, ?LOGIC_ERROR_SEATNUM_EXCEPTION}, wait, State}
 			end
 	end;
 wait({exitroom, {UserId, SeatNum}}, _From, State) ->
@@ -279,7 +291,7 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 	?FILE_LOG_DEBUG("exitroom user_id=~p, seat_num=~p, room_id=~p", [UserId, SeatNum, RoomId]),
 	case gb_trees:lookup(UserId, UserBasicDataTree) of
 		none ->
-			{reply, {failed, ?SS510K_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
+			{reply, {failed, ?LOGIC_ERROR_NOT_IN_ROOM_NOT_SITDOWN}, wait, State};
 		{value, _} ->
 			if
 				SeatNum =:= -1 ->
@@ -287,7 +299,7 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 					case gb_sets:is_element(UserId, ObSet) of
 						false ->
 							%%当前并不在ob位
-							{reply, {failed, ?SS510K_ERROR_NOT_OB}, wait, State};
+							{reply, {failed, ?LOGIC_ERROR_NOT_OB}, wait, State};
 						true ->
 							NewObSet = gb_sets:delete(UserId, ObSet),
 							NewUserBasicDataTree = gb_trees:delete(UserId, UserBasicDataTree),
@@ -309,11 +321,11 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 							{reply, success, wait, State#state{seat_tree = NewSeatTree, user_basicdata_tree = NewUserBasicDataTree}};
 						{value, OtherUserId} ->
 							?FILE_LOG_WARNING("exitroom_failed, other_user_id ~p", [OtherUserId]),
-							{reply, {failed, ?SS510K_ERROR_SEAT_NOT_SELF}, wait, State};
+							{reply, {failed, ?LOGIC_ERROR_SEAT_NOT_SELF}, wait, State};
 						none ->
 							%%座位号异常
 							?FILE_LOG_WARNING("exitroom_failed, exception_seat_num ~p", [SeatNum]),
-							{reply, {failed, ?SS510K_ERROR_SEATNUM_EXCEPTION}, wait, State}
+							{reply, {failed, ?LOGIC_ERROR_SEATNUM_EXCEPTION}, wait, State}
 					end
 			end
 	end;
@@ -377,7 +389,12 @@ handle_sync_event(_Event, _From, StateName, State) ->
 	{next_state, NextStateName :: atom(), NewStateData :: term(),
 		timeout() | hibernate} |
 	{stop, Reason :: normal | term(), NewStateData :: term()}).
+handle_info(check_game_whethertostart, wait, #state{room_id = RoomId} = State) ->
+	%%十分钟都没开始
+	?FILE_LOG_DEBUG("state[wait] timeout, room_id=~p, timestamp=~p", [RoomId, qp_util:timestamp()]),
+	{stop, normal, State};
 handle_info(_Info, StateName, State) ->
+	?FILE_LOG_WARNING("info=~p, state_name=~p", [_Info, StateName]),
 	{next_state, StateName, State}.
 
 %%--------------------------------------------------------------------
@@ -392,7 +409,9 @@ handle_info(_Info, StateName, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: normal | shutdown | {shutdown, term()}
 | term(), StateName :: atom(), StateData :: term()) -> term()).
-terminate(_Reason, _StateName, _State) ->
+terminate(_Reason, _StateName, #state{room_id = RoomId}) ->
+	room_mgr:destroy_room(RoomId),
+	%%通知房间所有人解散了
 	ok.
 
 %%--------------------------------------------------------------------
@@ -424,6 +443,18 @@ make_publicdata(UserBasicData) ->
 		avatar_url = UserBasicData:get(avatar_url),
 		nick_name = UserBasicData:get(nickname)}.
 
+make_roomcfg(RoomCfg) ->
+	#pb_room_cfg{
+		room_name = RoomCfg:get(name),
+		is_aa = RoomCfg:get(aa),
+		double_down_score = RoomCfg:get(double_down_score),
+		is_laizi_playmethod = RoomCfg:get(is_laizi_playmethod),
+		is_ob = RoomCfg:get(is_ob),
+		is_random = RoomCfg:get(is_random),
+		is_not_voice = RoomCfg:get(is_not_voice),
+		is_safe_mode = RoomCfg:get(is_safe_mode),
+		lock_userid_list = RoomCfg:get(lock_id_list)
+	}.
 
 
 select_seatnum(SeatTree, UserId, SeatNum, IsRandom, LockIdList) ->
@@ -441,7 +472,7 @@ select_seatnum(SeatTree, UserId, SeatNum, IsRandom, LockIdList) ->
 					%%不在锁定列表里
 					if
 						LockIdCount =:= 4 ->
-							{SeatTree, ?SS510K_ERROR_SEAT_FULL};
+							{SeatTree, ?LOGIC_ERROR_SEAT_FULL};
 						true ->
 							AvailableSeatCount =
 								lists:foldr(
@@ -458,22 +489,22 @@ select_seatnum(SeatTree, UserId, SeatNum, IsRandom, LockIdList) ->
 							if
 								AvailableSeatCount > 0 ->
 									select_seatnum(SeatTree, UserId, SeatNum, IsRandom);
-								true -> {SeatTree, ?SS510K_ERROR_SEAT_FULL}
+								true -> {SeatTree, ?LOGIC_ERROR_SEAT_FULL}
 							end
 					end
 			end
-	end,
-	ok.
+	end.
+
 select_seatnum(SeatTree, UserId, SeatNum, IsRandom) when IsRandom =:= true orelse (SeatNum < 0 andalso SeatNum > 3) ->
 	%%随机选择
 	case random_select_seatnum(SeatTree) of
-		full -> {SeatTree, ?SS510K_ERROR_SEAT_FULL};
+		full -> {SeatTree, ?LOGIC_ERROR_SEAT_FULL};
 		SelectSeatNum when is_integer(SelectSeatNum) -> {gb_trees:update(SelectSeatNum, UserId, SeatTree), SelectSeatNum, 0}
 	end;
 select_seatnum(SeatTree, UserId, SeatNum, _) ->
 	case gb_trees:get(SeatNum, SeatTree) of
 		{value, undefined} -> {gb_trees:update(SeatNum, UserId, SeatTree), SeatNum, 0};
-		{value, _} -> {SeatTree, ?SS510K_ERROR_SEAT_SOMEONE}
+		{value, _} -> {SeatTree, ?LOGIC_ERROR_SEAT_SOMEONE}
 	end.
 
 

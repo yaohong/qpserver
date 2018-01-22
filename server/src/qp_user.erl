@@ -36,14 +36,17 @@
 	start_link/2
 ]).
 -define(SERVER, ?MODULE).
--define(TIMER_SPACE, 3).
+-define(TIMER_SPACE, 10).
 -define(RECV_TIMEOUT, 30).
 
 -record(state, {
+	user_id=undefined,
 	receiveMonitor,
 	sockModule,
 	sockData,
-	last_recv_packet_time
+	last_recv_packet_time,
+
+	token_data
 }).
 
 %%%===================================================================
@@ -114,7 +117,9 @@ init([SockModule, SocketData]) ->
 					receiveMonitor = ReceiveMonitor,
 					sockModule = SockModule,
 					sockData = SocketData,
-					last_recv_packet_time = CurrentTime
+					last_recv_packet_time = CurrentTime,
+
+					token_data = undefined
 				}};
 		Other ->
 			?FILE_LOG_ERROR("socket init peername fail reason=[~p]", [Other]),
@@ -269,6 +274,9 @@ handle_info(timeout_check, StateName, #state{last_recv_packet_time = LastRecvPac
 				qp_user, timer_callback, [self()]),
 			{next_state, StateName, State}
 	end;
+handle_info({bin, Bin}, StateName, State) ->
+	send_bin(Bin, State),
+	{next_state, StateName, State};
 handle_info(_Info, StateName, State) ->
 	{next_state, StateName, State}.
 
@@ -285,8 +293,13 @@ handle_info(_Info, StateName, State) ->
 -spec(terminate(Reason :: normal | shutdown | {shutdown, term()}
 | term(), StateName :: atom(), StateData :: term()) ->
 	term()).
-terminate(_Reason, _StateName, #state{} = State) ->
+terminate(_Reason, _StateName, #state{user_id = UserId} = State) ->
 	?FILE_LOG_DEBUG("qp_user terminate", []),
+	if
+		UserId =/= undefined ->
+			room_user_mgr:request(UserId, {disconnect, self()});
+		true -> ok
+	end,
 	(State#state.sockModule):close(State#state.sockData),
 	ok.
 
@@ -317,16 +330,27 @@ send_bin(Bin, State) when is_binary(Bin) andalso is_record(State, state)->
 
 packet_handle(#qp_login_req{account = Acc, pwd = Pwd}, wait_login, State) ->
 	?FILE_LOG_DEBUG("login_req acc=~p, pwd=~p", [Acc, Pwd]),
-	PublicData = #pb_user_public_data{user_id = 10000, nick_name = unicode:characters_to_binary("石头哥哥"), avatar_url = "http://www.baidu.com"},
-	PrivateData = #pb_user_private_data{room_card_count = 100},
-	Rsp = #qp_login_rsp{state = 0, public_data = PublicData, private_data = PrivateData},
-	send_packet(Rsp, State),
-	{login_success, State, true};
+	case qp_db:account_verify(Acc, Pwd) of
+		{success, UserId, IsCreate} ->
+			?FILE_LOG_DEBUG("account_verify success, user_id=~p, is_create=~p", [UserId, IsCreate]),
+			{success, {TokenData, {CardCount, Nickname, AvatarUrl}}} = room_user_mgr:request(UserId, {login, self()}),
+			?FILE_LOG_DEBUG("login success, token_data=~p", [TokenData]),
+			PublicData = #pb_user_public_data{user_id = UserId, nick_name = Nickname, avatar_url = AvatarUrl},
+			PrivateData = #pb_user_private_data{room_card_count = CardCount},
+			Rsp = #qp_login_rsp{state = 0, public_data = PublicData, private_data = PrivateData},
+			send_packet(Rsp, State),
+			{login_success, State#state{user_id = UserId, token_data = TokenData}, true};
+		{failed, ErrorCode} ->
+			?FILE_LOG_DEBUG("login_req failed, code=~p", [ErrorCode]),
+			ErrorRsp = #qp_login_rsp{state = ErrorCode},
+			send_packet(ErrorRsp, State),
+			{wait_login, State, false}
+	end;
 packet_handle(Req, wait_login, _State) ->
 	?FILE_LOG_DEBUG("wait_login, req=~p", [Req]),
 	throw({custom, state_error});
 
-packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, State) ->
+packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, #state{user_id = UserId, token_data = TokenData} = State) ->
 	#pb_room_cfg{
 		room_name = RoomName,
 		is_aa = AA,
@@ -335,11 +359,29 @@ packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, State) ->
 		is_ob = IsOb,
 		is_random = IsRandom,
 		is_not_voice = IsNotVoice,
-		is_safe_mode = IsSafeMode
+		is_safe_mode = IsSafeMode,
+		lock_userid_list = LockUserIdList
 	} = RoomCfg,
 
-	?FILE_LOG_DEBUG("room_name=~ts, is_aa=~p, double_down_score=~p, is_laizi_playmethod=~p, is_ob=~p, is_random=~p, is_not_voice=~p, is_safe_mode=~p",
-		[RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode]),
+	?FILE_LOG_DEBUG("room_name=~ts, is_aa=~p, double_down_score=~p, is_laizi_playmethod=~p, is_ob=~p, is_random=~p, is_not_voice=~p, is_safe_mode=~p, lock_id_list=~p",
+		[RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockUserIdList]),
+	CreateRoomRsp =
+		case room_user_mgr:request(
+			UserId,
+			{
+				TokenData,
+				{
+					create_room,
+					{RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockUserIdList}
+				}
+			}) of
+			{success, RoomId} ->
+				?FILE_LOG_DEBUG("create_room success, room_id=~p", [RoomId]),
+				#qp_create_room_rsp{state = 0, room_id = RoomId};
+			{failed, ErrorCode} ->
+				#qp_create_room_rsp{state = ErrorCode}
+		end,
+	send_packet(CreateRoomRsp, State),
 	{login_success, State, true}.
 
 

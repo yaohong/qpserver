@@ -10,28 +10,49 @@
 -author("yaohong").
 
 -behaviour(gen_fsm).
-
+-include("../../deps/file_log/include/file_log.hrl").
+-include("../qp_error.hrl").
+-include("../qp_define.hrl").
 %% API
--export([start_link/0]).
+-export([start/1, start_link/1]).
 
 %% gen_fsm callbacks
 -export([init/1,
-	state_name/2,
-	state_name/3,
+	hall/2, room/2,
+	hall/3, room/3,
 	handle_event/3,
 	handle_sync_event/4,
 	handle_info/3,
 	terminate/3,
 	code_change/4]).
-
+-export([post/3]).
 -define(SERVER, ?MODULE).
 
--record(state, {}).
+-record(state, {
+	user_id,
+	nickname :: string(),
+	avatar_url :: string(),
+
+	card_count :: integer(),            %%房卡数量
+	lock_count_count :: integer(),       %%锁定的房卡数量
+
+
+	token_data :: term(),
+
+
+	room_logic_mod,
+
+
+
+	room_pid :: pid() | undefined
+}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-
+%%参数由两部分组成{token_data, event_data}.
+post(Pid, From, Param) ->
+	gen_fsm:send_event(Pid, {From, Param}).
 %%--------------------------------------------------------------------
 %% @doc
 %% Creates a gen_fsm process which calls Module:init/1 to
@@ -40,9 +61,14 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(start_link() -> {ok, pid()} | ignore | {error, Reason :: term()}).
-start_link() ->
-	gen_fsm:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+-spec start(UserId :: integer()) ->
+	{ok, pid()}.
+start(UserId) ->
+	supervisor:start_child(room_user_sup, [UserId]).
+
+start_link(UserId) ->
+	gen_fsm:start_link(?MODULE, [UserId], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -61,8 +87,31 @@ start_link() ->
 	{ok, StateName :: atom(), StateData :: #state{}} |
 	{ok, StateName :: atom(), StateData :: #state{}, timeout() | hibernate} |
 	{stop, Reason :: term()} | ignore).
-init([]) ->
-	{ok, state_name, #state{}}.
+init([UserId]) ->
+	%%{stop, test}.
+	?FILE_LOG_DEBUG("ss510k_user start success, user_id=~p", [UserId]),
+	%%从数据库加载信息
+
+	case qp_db:load_game_data(UserId) of
+		{success, {RoomCard, NickName, AvatarUrl}, _} ->
+			{success, RoomLogicMod} = qp_config:get_cfg(room_logic_mod),
+			{ok,
+				hall,
+				#state{
+					user_id = UserId,
+					nickname = NickName,
+					avatar_url = AvatarUrl,
+					card_count = RoomCard,
+					lock_count_count = 0,
+					token_data = undefined,
+					room_logic_mod = RoomLogicMod,
+
+					room_pid = undefined
+				}};
+		{failed, DbErrorCode} ->
+			?FILE_LOG_ERROR("load_game_data failed, ~p", [DbErrorCode]),
+			{stop, load_data_failed}
+	end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -75,13 +124,83 @@ init([]) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(state_name(Event :: term(), State :: #state{}) ->
+-spec(hall(Event :: term(), State :: #state{}) ->
 	{next_state, NextStateName :: atom(), NextState :: #state{}} |
 	{next_state, NextStateName :: atom(), NextState :: #state{},
 		timeout() | hibernate} |
 	{stop, Reason :: term(), NewState :: #state{}}).
-state_name(_Event, State) ->
-	{next_state, state_name, State}.
+
+hall({From, {login, QpUserPid}}, #state{token_data = OldTokenData, card_count = CardCount, nickname = Nickname, avatar_url = AvatarUrl} = State) ->
+	try
+		if
+			OldTokenData =/= undefined ->
+				%%之前有绑定qpuserid
+				%%降之前的T下线
+					catch OldTokenData:kick(),
+				ok;
+			true -> ok
+		end,
+
+		NewTokenData = token_data:new(QpUserPid),
+		?FILE_LOG_DEBUG("connect success, [~p]=>[~p]", [OldTokenData, NewTokenData]),
+		From:reply({success, {NewTokenData, {CardCount, Nickname, AvatarUrl}}}),
+		{next_state, hall, State#state{token_data = NewTokenData}}
+	catch
+		What:Type ->
+			?printSystemError(What, Type),
+			From:reply({failed, ?SYSTEM_ERROR}),
+			{next_state, hall, State}
+	end;
+hall({From, {ReqTokenData, {create_room, {RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockIdList}}}},
+	#state{
+		user_id = UserId,
+		nickname = Nickname,
+		avatar_url = AvatarUrl,
+
+		token_data = TokenData,
+
+		card_count = CardCount,
+		lock_count_count = LockCardCount,
+
+		room_logic_mod = RoomLogicMod} = State) ->
+	try
+		compare_token(ReqTokenData, TokenData),
+		ConsumeCardCount =
+			if
+				AA =:= true -> 1;
+				true -> 4
+			end,
+		ValidCardCount = valid_card_count(CardCount, LockCardCount),
+		if
+			ValidCardCount < ConsumeCardCount ->
+				%%房卡不够不能开
+				?FILE_LOG_WARNING("need card_count=~p, valid_card_count=~p", [ConsumeCardCount, ValidCardCount]),
+				throw({custom, ?LOGIC_ERROR_CARD_NOT_ENOUGH});
+			true -> ok
+		end,
+		RoomCfg = ss510k_room_cfg:new(RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockIdList),
+		UserBasicData = user_basic_data:new(UserId, self(), Nickname, AvatarUrl),
+		{success, {RoomId, RoomPid}} = room_mgr:create_room(UserBasicData, RoomCfg),
+		success = RoomLogicMod:join_room(RoomPid, UserBasicData),
+		From:reply({success, RoomId}),
+		{next_state, room, State#state{lock_count_count = LockCardCount + ConsumeCardCount, room_pid = RoomPid}}
+	catch
+		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
+			From:reply({failed, ErrorCode}),
+			{next_state, hall, State};
+		What:Type ->
+			?printSystemError(What, Type),
+			From:reply({failed, ?SYSTEM_ERROR}),
+			{next_state, hall, State}
+	end;
+hall(_Event, State) ->
+	{next_state, hall, State}.
+
+
+room({request, From, Param}, State) ->
+	{next_state, room, State};
+room(_Event, State) ->
+	{next_state, room, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -94,7 +213,7 @@ state_name(_Event, State) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(state_name(Event :: term(), From :: {pid(), term()},
+-spec(hall(Event :: term(), From :: {pid(), term()},
 	State :: #state{}) ->
 	{next_state, NextStateName :: atom(), NextState :: #state{}} |
 	{next_state, NextStateName :: atom(), NextState :: #state{},
@@ -105,9 +224,15 @@ state_name(_Event, State) ->
 	{stop, Reason :: normal | term(), NewState :: #state{}} |
 	{stop, Reason :: normal | term(), Reply :: term(),
 		NewState :: #state{}}).
-state_name(_Event, _From, State) ->
+
+hall(_Event, _From, State) ->
 	Reply = ok,
-	{reply, Reply, state_name, State}.
+	{reply, Reply, hall, State}.
+
+
+room(_Event, _From, State) ->
+	Reply = ok,
+	{reply, Reply, room, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -165,6 +290,10 @@ handle_sync_event(_Event, _From, StateName, State) ->
 	{next_state, NextStateName :: atom(), NewStateData :: term(),
 		timeout() | hibernate} |
 	{stop, Reason :: normal | term(), NewStateData :: term()}).
+handle_info({room_bin, Bin}, room, #state{token_data = TokenData} = State) ->
+	%%只有在房间才接收room_bin
+	TokenData:send_bin(Bin),
+	{next_state, room, State};
 handle_info(_Info, StateName, State) ->
 	{next_state, StateName, State}.
 
@@ -199,3 +328,12 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+valid_card_count(CardCount, LockCardCount) -> CardCount - LockCardCount.
+
+compare_token(LTokenData, RTokenData) ->
+	case LTokenData:compare(RTokenData) of
+		true -> true;
+		false ->
+			?FILE_LOG_ERROR("token compare failed, ~p, ~p", [LTokenData, RTokenData]),
+			throw({custom, ?SYSTEM_TOKEN_ERROR})
+	end.

@@ -20,8 +20,9 @@ start_link() ->
 
 init([]) ->
 	{success, {DbAddr, DbPort, DbUser, DbPassword, DbName}} = qp_config:get_cfg(db_addr),
-
-	%%sql:start(qp, DbAddr, DbPort, DbUser, DbPassword, DbName),
+	{success, UserLogicMod} = qp_config:get_cfg(user_logic_mod),
+	{success, RoomLogicMod} = qp_config:get_cfg(room_logic_mod),
+	sql:start(DbAddr, DbPort, DbUser, DbPassword, DbName),
 
 	TimerManager =
 		{timer_manager,
@@ -47,14 +48,48 @@ init([]) ->
 		 brutal_kill,
 		 supervisor,
 		 [qp_user_sup]},
+
+
+	RoomUserSupervisor =
+		{room_user_sup,
+			{tmp_sup, start_link, [room_user_sup, UserLogicMod]},
+			transient,
+			brutal_kill,
+			supervisor,
+			[room_user_sup]},
+
+	RoomSupervisor =
+		{room_sup,
+			{tmp_sup, start_link, [room_sup, RoomLogicMod]},
+			transient,
+			brutal_kill,
+			supervisor,
+			[room_sup]},
+
+	RoomUserMgr =
+		{room_user_mgr,
+			{room_user_mgr, start_link, []},
+			permanent,
+			5000,
+			worker,
+			[room_user_mgr]},
+
+	RoomMgr =
+		{room_mgr,
+			{room_mgr, start_link, []},
+			permanent,
+			5000,
+			worker,
+			[room_mgr]},
+
 	QpServer =
 		{
 			qp_server,
-		 	{tcp_server, start_link, [qp_util:ipstr_to_v4(ListenIp), ListenPort, qp_server, qp_user, 4, qp_user_sup, qp_receiver_sup, 256 * 1024]},
+			{tcp_server, start_link, [qp_util:ipstr_to_v4(ListenIp), ListenPort, qp_server, qp_user, 4, qp_user_sup, qp_receiver_sup, 256 * 1024]},
 			transient,
-		 	brutal_kill,
-		 	supervisor,
-		 	[qp_server]
+			brutal_kill,
+			supervisor,
+			[qp_server]
 		},
 
     {ok,
@@ -64,6 +99,10 @@ init([]) ->
 				TimerManager,
 				QpReceiverSupervisor,
 				QpUserSupervisor,
+				RoomUserSupervisor,
+				RoomSupervisor,
+				RoomUserMgr,
+				RoomMgr,
 				QpServer
 			]
     	}

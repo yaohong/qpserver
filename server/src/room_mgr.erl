@@ -4,14 +4,13 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created : 15. 一月 2018 13:23
+%%% Created : 22. 一月 2018 21:49
 %%%-------------------------------------------------------------------
--module(room_user_mgr).
+-module(room_mgr).
 -author("yaohong").
--include("../deps/file_log/include/file_log.hrl").
--include("qp_error.hrl").
--behaviour(gen_server).
 
+-behaviour(gen_server).
+-include("../deps/file_log/include/file_log.hrl").
 %% API
 -export([start_link/0]).
 
@@ -22,21 +21,32 @@
 	handle_info/2,
 	terminate/2,
 	code_change/3]).
--export([request/2]).
+-export([
+	create_room/2,
+	get_room_pid/1
+]).
+-export([destroy_room/1]).
 -define(SERVER, ?MODULE).
 
--record(state, {user_logic_mod}).
--record(game_user, {
-	user_id,
-	user_pid
+-record(state, {
+	current_id_list,
+	backup_id_list,
+	room_logic_mod
 }).
 
-
+-record(room_data, {room_id, room_pid, cfg, timestamp}).
 %%%===================================================================
 %%% API
 %%%===================================================================
-request(UserId, Param) ->
-	gen_server:call(?MODULE, {request, {UserId, Param}}).
+create_room(OwnerBasicData, RoomCfg) ->
+	gen_server:call(?MODULE, {create_room, {OwnerBasicData, RoomCfg}}).
+
+get_room_pid(RoomId) ->
+	gen_server:call(?MODULE, {get_room_pid, RoomId}).
+
+
+destroy_room(RoomId) ->
+	gen_server:cast(?MODULE, {destroy_room, RoomId}).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -67,9 +77,10 @@ start_link() ->
 	{ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
 	{stop, Reason :: term()} | ignore).
 init([]) ->
-	ets:new(all_game_user, [set, protected, named_table, {keypos, #game_user.user_id}]),
-	{success, UserLogicMod} = qp_config:get_cfg(user_logic_mod),
-	{ok, #state{user_logic_mod = UserLogicMod}}.
+	L = qp_util:random_list(lists:seq(100000, 999999)),
+	ets:new(all_room, [set, protected, named_table, {keypos, #room_data.room_id}]),
+	{success, RoomLogicMod} = qp_config:get_cfg(room_logic_mod),
+	{ok, #state{current_id_list = L, backup_id_list= [], room_logic_mod = RoomLogicMod}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -86,35 +97,38 @@ init([]) ->
 	{noreply, NewState :: #state{}, timeout() | hibernate} |
 	{stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
 	{stop, Reason :: term(), NewState :: #state{}}).
-handle_call({request, {UserId, Param}}, From, #state{user_logic_mod = UserLogicMod} = State) ->
-	case ets:lookup(all_game_user, UserId) of
-		[] ->
-			%%创建进程
-			ets:insert(all_game_user, #game_user{user_id = UserId, user_pid = undefined}),
-			spawn(
-				fun() ->
-					case catch UserLogicMod:start(UserId) of
-						{ok, Pid} ->
-							?MODULE ! {start_success, {UserId, Pid, Param, From}},
-							ok;
-						{error, ErrorCode} ->
-							?FILE_LOG_ERROR("start new game_user failed, code=~p", [ErrorCode]),
-							?MODULE ! {start_failed, {UserId, From}},
-							ok;
-						Other ->
-							?FILE_LOG_ERROR("~p", [Other]),
-							?MODULE ! {start_failed, {UserId, From}}
-					end
-				end),
-			{noreply, State};
-		[#game_user{user_pid = undefined}] ->
-			%%正在加载中
-			{reply, {failed, ?SYSTEM_TRY_AGAIN}, State};
-		[#game_user{user_pid = UserPid}] when is_pid(UserPid) ->
-			UserLogicMod:post(UserPid, from:new(From), Param),
-			{noreply, State}
-	end,
-	{noreply, State};
+handle_call({create_room, {OwnerBasicData, RoomCfg}}, _From, #state{room_logic_mod = RoomLogicMod, current_id_list = [RoomId|LastCurrentIdList], backup_id_list = BackupIdList} = State) ->
+	Reply =
+		case catch RoomLogicMod:start(RoomId, OwnerBasicData, RoomCfg) of
+			{ok, RoomPid} ->
+				?FILE_LOG_DEBUG("create_room room_id[~p], timestamp=~p", [RoomId, qp_util:timestamp()]),
+				ets:insert(
+					all_room,
+					#room_data{
+						room_id = RoomId,
+						room_pid = RoomPid,
+						cfg = RoomCfg,
+						timestamp = qp_util:timestamp()}),
+				{success, {RoomId, RoomPid}};
+			Other ->
+				?FILE_LOG_ERROR("basic_data:~p, room_cfg:~p, ~p", [OwnerBasicData, RoomCfg, Other]),
+				failed
+		end,
+	NewState =
+		if
+			LastCurrentIdList =:= [] -> State#state{current_id_list = BackupIdList, backup_id_list = []};
+			true -> State#state{current_id_list = LastCurrentIdList}
+		end,
+	{reply, Reply, NewState};
+handle_call({get_room_pid, RoomId}, _From, State) ->
+	Reply =
+		case ets:lookup(all_room, RoomId) of
+			[] -> failed;
+			[#room_data{room_pid = RoomPid}] ->
+				{success, RoomPid}
+		end,
+	{reply, Reply, State};
+
 handle_call(_Request, _From, State) ->
 	{reply, ok, State}.
 
@@ -129,6 +143,10 @@ handle_call(_Request, _From, State) ->
 	{noreply, NewState :: #state{}} |
 	{noreply, NewState :: #state{}, timeout() | hibernate} |
 	{stop, Reason :: term(), NewState :: #state{}}).
+handle_cast({destroy_room, RoomId}, #state{backup_id_list = BackupIdList}= State) ->
+	?FILE_LOG_DEBUG("destory_room room_id[~p], timestamp=~p", [RoomId, qp_util:timestamp()]),
+	ets:delete(all_room, RoomId),
+	{noreply, State#state{backup_id_list = [RoomId|BackupIdList]}};
 handle_cast(_Request, State) ->
 	{noreply, State}.
 
@@ -146,34 +164,6 @@ handle_cast(_Request, State) ->
 	{noreply, NewState :: #state{}} |
 	{noreply, NewState :: #state{}, timeout() | hibernate} |
 	{stop, Reason :: term(), NewState :: #state{}}).
-handle_info({start_success, {UserId, UserPid, Param, From}}, #state{user_logic_mod = UserLogicMod} = State) ->
-	case ets:lookup(all_game_user, UserId) of
-		[] ->
-			?FILE_LOG_WARNING("create game_user failed, find_id_failed[~p]", [UserId]),
-			gen_server:reply(From, {failed, ?SYSTEM_ERROR});
-		[#game_user{user_pid = OldUserPid}] when is_pid(OldUserPid) ->
-			?FILE_LOG_WARNING("create game_user failed, old_user_pid[~p]", [UserId]),
-			gen_server:reply(From, {failed, ?SYSTEM_ERROR});
-		[#game_user{user_pid = undefined}] ->
-			?FILE_LOG_DEBUG("create game_user success pid=~p", [UserPid]),
-			ets:update_element(all_game_user, UserId, [{#game_user.user_pid, UserPid}]),
-			UserLogicMod:post(UserPid, from:new(From), Param)
-	end,
-	{noreply, State};
-handle_info({start_failed, {UserId, From}}, State) ->
-	case ets:lookup(all_game_user, UserId) of
-		[] ->
-			?FILE_LOG_DEBUG("cannot_delete user_id[~p] not exist", [UserId]),
-			ok;
-		[#game_user{user_pid = undefined}] ->
-			ets:delete(all_game_user, UserId),
-			ok;
-		[#game_user{user_pid = OldUserPid}] when is_pid(OldUserPid) ->
-			?FILE_LOG_DEBUG("cannot_delete old_pid=~p", [OldUserPid]),
-			ok
-	end,
-	gen_server:reply(From, {failed, ?SYSTEM_ERROR}),
-	{noreply, State};
 handle_info(_Info, State) ->
 	{noreply, State}.
 

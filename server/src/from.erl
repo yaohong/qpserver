@@ -4,12 +4,22 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created : 14. 一月 2018 17:26
+%%% Created : 22. 一月 2018 17:07
 %%%-------------------------------------------------------------------
+-module(from).
 -author("yaohong").
 
--ifndef(_ss510k_error_h__).
--define(_ss510k_error_h__, 0).
+%% API
+-export([
+	new/1,
+	reply/2
+]).
 
 
--endif.
+new(From) ->
+	{?MODULE, [From]}.
+
+
+
+reply(Value, {?MODULE, [From]}) ->
+	gen_server:reply(From, Value).
