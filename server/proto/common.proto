@@ -110,7 +110,8 @@ message pb_room_user {
 
 message qp_join_room_rsp {
     required int32 result = 1;
-    optional pb_room_data room_data = 2;
+    optional int32 room_id = 2;
+    optional pb_room_data room_data = 3;
 }
 
 
