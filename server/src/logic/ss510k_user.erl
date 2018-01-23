@@ -36,14 +36,10 @@
 	card_count :: integer(),            %%房卡数量
 	lock_card_count :: integer(),       %%锁定的房卡数量
 
-
 	token_data :: term(),
 
-
 	room_logic_mod,
-
-
-
+	
 	room_pid :: pid() | undefined
 }).
 
@@ -136,7 +132,8 @@ hall({From, {login, QpUserPid}}, #state{token_data = OldTokenData, card_count = 
 			OldTokenData =/= undefined ->
 				%%之前有绑定qpuserid
 				%%降之前的T下线
-					catch OldTokenData:kick(),
+				?FILE_LOG_DEBUG("old_token_data=~p, kick", [OldTokenData]),
+				catch OldTokenData:kick(),
 				ok;
 			true -> ok
 		end,
@@ -151,7 +148,66 @@ hall({From, {login, QpUserPid}}, #state{token_data = OldTokenData, card_count = 
 			From:reply({failed, ?SYSTEM_ERROR}),
 			{next_state, hall, State}
 	end;
+hall({From, {disconnect, ReqTokenData}}, #state{token_data = TokenData, user_id = UserId} = State) ->
+	try
+		compare_token(ReqTokenData, TokenData),
+		?FILE_LOG_DEBUG("user_id=~p, ~p, disconnect", [UserId, TokenData]),
+		{next, hall, State#state{token_data = undefined}}
+	catch
+		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
+		From:reply({failed, ErrorCode}),
+		{next_state, hall, State};
+	What:Type ->
+		?printSystemError(What, Type),
+		From:reply({failed, ?SYSTEM_ERROR}),
+		{next_state, hall, State}
+	end;
 hall({From, {ReqTokenData, {create_room, {RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockIdList}}}},
+	#state{
+		user_id = UserId,
+		nickname = Nickname,
+		avatar_url = AvatarUrl,
+
+		token_data = TokenData,
+
+		card_count = CardCount,
+		lock_card_count = LockCardCount,
+
+		room_logic_mod = RoomLogicMod} = State) ->
+	try
+		compare_token(ReqTokenData, TokenData),
+		ConsumeCardCount =
+			if
+				AA =:= true -> 1;
+				true -> 4
+			end,
+		ValidCardCount = valid_card_count(CardCount, LockCardCount),
+		if
+			ValidCardCount < ConsumeCardCount ->
+				%%房卡不够不能开
+				?FILE_LOG_WARNING("need card_count=~p, valid_card_count=~p", [ConsumeCardCount, ValidCardCount]),
+				throw({custom, ?LOGIC_ERROR_CARD_NOT_ENOUGH});
+			true -> ok
+		end,
+		RoomCfg = ss510k_room_cfg:new(RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockIdList),
+		UserBasicData = user_basic_data:new(UserId, self(), Nickname, AvatarUrl),
+		{success, {RoomId, RoomPid}} = room_mgr:create_room(UserBasicData, RoomCfg),
+		success = RoomLogicMod:join_room(RoomPid, UserBasicData),
+		From:reply({success, RoomId}),
+		NewLockCardCount = LockCardCount + ConsumeCardCount,
+		?FILE_LOG_DEBUG("user[~p] create_room_success, lock_card_count[~p=>~p] hall=>room, room_pid=~p", [
+			UserId, LockCardCount, NewLockCardCount, RoomPid]),
+		{next_state, room, State#state{lock_card_count = NewLockCardCount, room_pid = RoomPid}}
+	catch
+		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
+			From:reply({failed, ErrorCode}),
+			{next_state, hall, State};
+		What:Type ->
+			?printSystemError(What, Type),
+			From:reply({failed, ?SYSTEM_ERROR}),
+			{next_state, hall, State}
+	end;
+hall({From, {ReqTokenData, {join_room, RoomId}}},
 	#state{
 		user_id = UserId,
 		nickname = Nickname,
@@ -326,7 +382,11 @@ handle_info(
 				end,
 			NewCardCount = CardCount - ConsumeRoomCard,
 			NewLockCardCount = LockCardCount - ConsumeRoomCard,
-			?FILE_LOG_DEBUG("consume room_card ~p, card_count[~p=>~p] lock_card_count[~p=>~p]", [ConsumeRoomCard, CardCount, NewCardCount, LockCardCount, NewLockCardCount]),
+			?FILE_LOG_DEBUG(
+				"user_id=~p, consume_room_card ~p, card_count[~p=>~p] lock_card_count[~p=>~p]",
+				[UserId, ConsumeRoomCard, CardCount, NewCardCount, LockCardCount, NewLockCardCount]),
+			?FILE_LOG_DEBUG("user_id=~p room=>hall.", [UserId]),
+			%%如果当前有qp_user的绑定
 			{next_state, hall, State#state{room_pid = undefined, card_count = NewCardCount, lock_card_count = NewLockCardCount}}
 	end;
 handle_info(_Info, StateName, State) ->

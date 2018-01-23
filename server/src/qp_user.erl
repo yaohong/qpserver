@@ -277,6 +277,9 @@ handle_info(timeout_check, StateName, #state{last_recv_packet_time = LastRecvPac
 handle_info({bin, Bin}, StateName, State) ->
 	send_bin(Bin, State),
 	{next_state, StateName, State};
+handle_info(kick, StateName, State) ->
+	?FILE_LOG_DEBUG("kick ~p ~p", [self(), StateName]),
+	{stop, normal, State#state{token_data = undefined}};
 handle_info(_Info, StateName, State) ->
 	{next_state, StateName, State}.
 
@@ -293,11 +296,11 @@ handle_info(_Info, StateName, State) ->
 -spec(terminate(Reason :: normal | shutdown | {shutdown, term()}
 | term(), StateName :: atom(), StateData :: term()) ->
 	term()).
-terminate(_Reason, _StateName, #state{user_id = UserId} = State) ->
-	?FILE_LOG_DEBUG("qp_user terminate", []),
+terminate(_Reason, _StateName, #state{user_id = UserId, token_data = TokenData} = State) ->
+	?FILE_LOG_DEBUG("qp_user ~p, ~p terminate", [UserId, TokenData]),
 	if
-		UserId =/= undefined ->
-			room_user_mgr:request(UserId, {disconnect, self()});
+		TokenData =/= undefined ->
+			room_user_mgr:request(UserId, {disconnect, TokenData});
 		true -> ok
 	end,
 	(State#state.sockModule):close(State#state.sockData),
@@ -365,16 +368,33 @@ packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, #state{user_id 
 
 	?FILE_LOG_DEBUG("room_name=~ts, is_aa=~p, double_down_score=~p, is_laizi_playmethod=~p, is_ob=~p, is_random=~p, is_not_voice=~p, is_safe_mode=~p, lock_id_list=~p",
 		[RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockUserIdList]),
-	CreateRoomRsp =
-		case room_user_mgr:request(
-			UserId,
+
+	case room_user_mgr:request(
+		UserId,
+		{
+			TokenData,
 			{
-				TokenData,
-				{
-					create_room,
-					{RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockUserIdList}
-				}
-			}) of
+				create_room,
+				{RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockUserIdList}
+			}
+		}) of
+		{success, RoomId} ->
+			?FILE_LOG_DEBUG("user_id=~p, create_room success, room_id=~p", [UserId, RoomId]),
+			send_packet(#qp_create_room_rsp{state = 0, room_id = RoomId}, State);
+		{failed, ErrorCode} ->
+			send_packet(#qp_create_room_rsp{state = ErrorCode}, State);
+		ignore ->
+			%%状态不对忽略
+			%%不给客户端发送相应包
+			?FILE_LOG_WARNING("user_id=~p, create_room ignore", [UserId]),
+			ok
+	end,
+	{login_success, State, true};
+packet_handle(#qp_join_room_req{room_id = RoomId}, login_success, #state{user_id = UserId, token_data = TokenData} = State) ->
+
+	?FILE_LOG_DEBUG("user_id join_room, room_id=~p", [RoomId]),
+	CreateRoomRsp =
+		case room_user_mgr:request(UserId, {TokenData, {join_room, RoomId}}) of
 			{success, RoomId} ->
 				?FILE_LOG_DEBUG("create_room success, room_id=~p", [RoomId]),
 				#qp_create_room_rsp{state = 0, room_id = RoomId};
@@ -383,5 +403,6 @@ packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, #state{user_id 
 		end,
 	send_packet(CreateRoomRsp, State),
 	{login_success, State, true}.
+
 
 
