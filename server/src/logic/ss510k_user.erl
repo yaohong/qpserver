@@ -34,7 +34,7 @@
 	avatar_url :: string(),
 
 	card_count :: integer(),            %%房卡数量
-	lock_count_count :: integer(),       %%锁定的房卡数量
+	lock_card_count :: integer(),       %%锁定的房卡数量
 
 
 	token_data :: term(),
@@ -102,7 +102,7 @@ init([UserId]) ->
 					nickname = NickName,
 					avatar_url = AvatarUrl,
 					card_count = RoomCard,
-					lock_count_count = 0,
+					lock_card_count = 0,
 					token_data = undefined,
 					room_logic_mod = RoomLogicMod,
 
@@ -160,7 +160,7 @@ hall({From, {ReqTokenData, {create_room, {RoomName, AA, DoubleDownScore, IsLaizi
 		token_data = TokenData,
 
 		card_count = CardCount,
-		lock_count_count = LockCardCount,
+		lock_card_count = LockCardCount,
 
 		room_logic_mod = RoomLogicMod} = State) ->
 	try
@@ -183,7 +183,10 @@ hall({From, {ReqTokenData, {create_room, {RoomName, AA, DoubleDownScore, IsLaizi
 		{success, {RoomId, RoomPid}} = room_mgr:create_room(UserBasicData, RoomCfg),
 		success = RoomLogicMod:join_room(RoomPid, UserBasicData),
 		From:reply({success, RoomId}),
-		{next_state, room, State#state{lock_count_count = LockCardCount + ConsumeCardCount, room_pid = RoomPid}}
+		NewLockCardCount = LockCardCount + ConsumeCardCount,
+		?FILE_LOG_DEBUG("user[~p] create_room_success, lock_card_count[~p=>~p] hall=>room, room_pid=~p", [
+			UserId, LockCardCount, NewLockCardCount, RoomPid]),
+		{next_state, room, State#state{lock_card_count = NewLockCardCount, room_pid = RoomPid}}
 	catch
 		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
 			From:reply({failed, ErrorCode}),
@@ -290,10 +293,42 @@ handle_sync_event(_Event, _From, StateName, State) ->
 	{next_state, NextStateName :: atom(), NewStateData :: term(),
 		timeout() | hibernate} |
 	{stop, Reason :: normal | term(), NewStateData :: term()}).
-handle_info({room_bin, Bin}, room, #state{token_data = TokenData} = State) ->
+handle_info({room_msg, {bin, Bin}}, room, #state{token_data = TokenData} = State) ->
 	%%只有在房间才接收room_bin
 	TokenData:send_bin(Bin),
 	{next_state, room, State};
+handle_info(
+	{room_msg, {dissmiss, {ExitMake, DissmissRoomPid, RoomOwnerId, IsAA}}},
+	room,
+	#state{user_id = UserId, room_pid = CurrentRoomPid, card_count = CardCount, lock_card_count = LockCardCount} = State) ->
+	?FILE_LOG_DEBUG(
+		"room_dissmiss, exitMake=~p, dissmissRoomPid=~p, roomOwnerId=~p, isAA=~p user[~p] hall=>room",
+		[ExitMake, DissmissRoomPid, RoomOwnerId, IsAA, UserId]),
+	if
+		DissmissRoomPid =/= CurrentRoomPid ->
+			?FILE_LOG_WARNING("user_id=~p, room_diss_exception, currentRoomPid=~p", [UserId, CurrentRoomPid]),
+			{next_state, room, State};
+		true ->
+			ConsumeRoomCard =
+				if
+					ExitMake =:= 0 -> 0;            %%房间不是正常打完结束
+					true ->
+						%%正常打完结束
+						if
+							IsAA =:= true -> 1;     %%AA的方式
+							true ->
+								%%房主一个人包了
+								if
+									RoomOwnerId =:= UserId -> 4;
+									true -> 0
+								end
+						end
+				end,
+			NewCardCount = CardCount - ConsumeRoomCard,
+			NewLockCardCount = LockCardCount - ConsumeRoomCard,
+			?FILE_LOG_DEBUG("consume room_card ~p, card_count[~p=>~p] lock_card_count[~p=>~p]", [ConsumeRoomCard, CardCount, NewCardCount, LockCardCount, NewLockCardCount]),
+			{next_state, hall, State#state{room_pid = undefined, card_count = NewCardCount, lock_card_count = NewLockCardCount}}
+	end;
 handle_info(_Info, StateName, State) ->
 	{next_state, StateName, State}.
 

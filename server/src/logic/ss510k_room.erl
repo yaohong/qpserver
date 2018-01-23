@@ -41,7 +41,7 @@
 -define(CHECK_GAME_WHETHER_TO_START_TIMEOUT, 10 * 60).
 -record(state, {
 	room_id :: integer(),
-	owner_basic_data :: integer(),
+	owner_basic_data :: any(),
 	room_cfg :: any(),
 
 	ob_set :: gb_sets:set(),                %%存放观众的集合
@@ -49,7 +49,12 @@
 
 	user_basicdata_tree :: gb_trees:tree(),   %%存放玩家基础数据的树
 
-	seat_tree :: gb_trees:tree()            %%描述座位信息
+	seat_tree :: gb_trees:tree(),            %%描述座位信息
+
+
+
+
+	exit_make=0 :: integer()                  %%退出标志(打完结束，中途解散) 0: 中途解散 1:打完结束
 }).
 
 %%%===================================================================
@@ -70,7 +75,7 @@ exitroom(RoomPid, UserId, SeatNum) ->
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%检查游戏是否开始的定时器
 cb_check_game_whethertostart(_Ref, Pid) ->
 	Pid ! check_game_whethertostart.
 %%--------------------------------------------------------------------
@@ -125,7 +130,8 @@ init([RoomId, OwnerBasicData, RoomCfg]) ->
 			room_cfg = RoomCfg,
 			ob_set = gb_sets:empty(),
 			user_basicdata_tree = gb_trees:empty(),
-			seat_tree = T4
+			seat_tree = T4,
+			exit_make = 0
 		}}.
 
 %%--------------------------------------------------------------------
@@ -207,7 +213,7 @@ wait({join_room, UserBasicData}, _From, #state{room_cfg = RoomCfg} = State) ->
 			%%给房间里的其他人发送玩家进入的消息
 			PbJoinRoomPush = #qp_join_room_push{public_data = make_publicdata(UserBasicData)},
 			PushPbBin = qp_proto:encode_qp_packet(PbJoinRoomPush),
-			room_broadcast(UserBasicDataTree, PushPbBin),
+			room_broadcast(UserBasicDataTree, {bin, PushPbBin}),
 			%%给自己发送房间里其他玩家的信息
 			AllRoomUsers =
 				lists:map(
@@ -220,7 +226,7 @@ wait({join_room, UserBasicData}, _From, #state{room_cfg = RoomCfg} = State) ->
 					result = 0,
 					room_data = PbRoomData},
 			PbJoinRoomRspBin = qp_proto:encode_qp_packet(PbJoinRoomRsp),
-			UserBasicData:send_room_bin(PbJoinRoomRspBin),
+			UserBasicData:send_room_msg({bin, PbJoinRoomRspBin}),
 			{reply, success, wait, State#state{user_basicdata_tree = NewUserBasicDataTree, ob_set = NewObSet}}
 	end;
 wait({sitdown, {UserId, SeatNum}}, _From, State) ->
@@ -269,7 +275,7 @@ wait({standup, {UserId, SeatNum}}, _From, State) ->
 
 					PbPush = #qp_standup_push{seat_num = SeatNum},
 					%%给其他人广播我起立的消息(过滤掉自己)
-					room_broadcast(UserBasicDataTree, qp_proto:encode_qp_packet(PbPush), UserId),
+					room_broadcast(UserBasicDataTree, {bin, qp_proto:encode_qp_packet(PbPush)}, UserId),
 
 					{reply, success, wait, State#state{ob_set = NewObSet, seat_tree = NewSeatTree}};
 				{value, OtherUserId} ->
@@ -306,7 +312,7 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 
 							%%给其他人广播玩家退出房间的消息
 							PbPush = #qp_exit_room_push{user_id = UserId},
-							room_broadcast(NewUserBasicDataTree, qp_proto:encode_qp_packet(PbPush)),
+							room_broadcast(NewUserBasicDataTree, {bin, qp_proto:encode_qp_packet(PbPush)}),
 
 							{reply, success, wait, State#state{ob_set = NewObSet, user_basicdata_tree = NewUserBasicDataTree}}
 					end;
@@ -317,7 +323,7 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 							NewSeatTree = gb_trees:update(SeatNum, undefined, SeatTree),
 							NewUserBasicDataTree = gb_trees:delete(UserId, UserBasicDataTree),
 							PbPush = #qp_exit_room_push{user_id = UserId},
-							room_broadcast(NewUserBasicDataTree, qp_proto:encode_qp_packet(PbPush)),
+							room_broadcast(NewUserBasicDataTree, {bin, qp_proto:encode_qp_packet(PbPush)}),
 							{reply, success, wait, State#state{seat_tree = NewSeatTree, user_basicdata_tree = NewUserBasicDataTree}};
 						{value, OtherUserId} ->
 							?FILE_LOG_WARNING("exitroom_failed, other_user_id ~p", [OtherUserId]),
@@ -409,9 +415,12 @@ handle_info(_Info, StateName, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: normal | shutdown | {shutdown, term()}
 | term(), StateName :: atom(), StateData :: term()) -> term()).
-terminate(_Reason, _StateName, #state{room_id = RoomId}) ->
+terminate(_Reason, _StateName, #state{room_id = RoomId, owner_basic_data = OwnerBasicData, room_cfg = RoomCfg, exit_make = ExitMake, user_basicdata_tree = UserBasicDataTree}) ->
+	?FILE_LOG_DEBUG("room_id[~p] dissmiss, make=~p", [RoomId, ExitMake]),
+	%%房间管理器回收房间ID
 	room_mgr:destroy_room(RoomId),
-	%%通知房间所有人解散了
+	%%通知房间发送房间解散的消息
+	room_broadcast(UserBasicDataTree, {dissmiss, {ExitMake, self(), OwnerBasicData:get(id), RoomCfg:get(aa)}}),
 	ok.
 
 %%--------------------------------------------------------------------
@@ -524,17 +533,17 @@ random_select_seatnum(SeatTree) ->
 			lists:nth(Index, LL)
 	end.
 
-room_broadcast(UserBasicDataTree, Bin) ->
+room_broadcast(UserBasicDataTree, Msg) ->
 	lists:foreach(
 		fun(RoomUserBasicData) ->
-			RoomUserBasicData:send_room_bin(Bin)
+			RoomUserBasicData:send_room_msg(Msg)
 		end, gb_trees:values(UserBasicDataTree)).
 
-room_broadcast(UserBasicDataTree, Bin, FilterUserId) ->
+room_broadcast(UserBasicDataTree, Msg, FilterUserId) ->
 	lists:foreach(
 		fun(RoomUserBasicData) ->
 			case RoomUserBasicData:get(id) of
 				FilterUserId -> ok;
-				_ -> RoomUserBasicData:send_room_bin(Bin)
+				_ -> RoomUserBasicData:send_room_msg(Msg)
 			end
 		end, gb_trees:values(UserBasicDataTree)).

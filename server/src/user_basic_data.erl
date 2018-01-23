@@ -14,7 +14,7 @@
 	new/4,
 	get/2,
 
-	send_room_bin/2
+	send_room_msg/2
 ]).
 
 
@@ -29,6 +29,5 @@ get(nickname, {?MODULE, [_Id, _, NickName, _AvatarUrl]}) ->
 get(avatar_url, {?MODULE, [_Id, _, _NickName, AvatarUrl]}) ->
 	AvatarUrl.
 
-
-send_room_bin(Bin, {?MODULE, [_, Pid, _NickName, _AvatarUrl]}) ->
-	Pid ! {room_bin, Bin}.
+send_room_msg(Msg, {?MODULE, [_, Pid, _NickName, _AvatarUrl]}) ->
+	Pid ! {room_msg, Msg}.
