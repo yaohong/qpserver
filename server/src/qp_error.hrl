@@ -27,6 +27,8 @@
 -define(LOGIC_ERROR_SEAT_NOT_SELF, 10007).                 %%座位上的人不是自己，不能起立
 -define(LOGIC_ERROR_NOT_OB, 10008).                        %%当前不在OB位
 -define(LOGIC_ERROR_CARD_NOT_ENOUGH, 10009).               %%房卡不够
--define(LOGIC_ERROR_CREATE_ROOM_FAILED, 10010).               %%创建房间失败
--define(LOGIC_ERROR_JOIN_ROOM_FAILED, 10011).               %%创建房间失败
+-define(LOGIC_ERROR_CREATE_ROOM_FAILED, 10010).            %%创建房间失败
+-define(LOGIC_ERROR_JOIN_ROOM_FAILED, 10011).              %%进入失败
+-define(LOGIC_ERROR_GET_ROOM_PID_FAILED, 10012).           %%获取房间进程失败
+-define(LOGIC_ERROR_GET_ROOM_INFO_FAILED, 10013).          %%获取房间信息失败
 -endif.

@@ -33,7 +33,8 @@
 
 -export([
 	join_room/2,
-	sitdown/3, standup/3, exitroom/3
+	sitdown/3, standup/3, exitroom/3,
+	get_room_pbdata/1
 ]).
 
 
@@ -72,6 +73,12 @@ standup(RoomPid, UserId, SeatNum) ->
 
 exitroom(RoomPid, UserId, SeatNum) ->
 	gen_fsm:sync_send_event(RoomPid, {exitroom, {UserId, SeatNum}}, infinity).
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+get_room_pbdata(PoomPid) ->
+	gen_fsm:sync_send_event(PoomPid, get_room_pbdata, infinity).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -191,36 +198,14 @@ wait({join_room, UserBasicData}, _From, #state{room_cfg = RoomCfg} = State) ->
 		false ->
 			NewUserBasicDataTree = gb_trees:insert(UserId, UserBasicData, UserBasicDataTree),
 			NewObSet = gb_sets:insert(UserId, ObSet),
-			%%下发OB选手的信息
-			UserDataList =
-				lists:map(
-					fun(ObUserId) ->
-						ObUserBasicData = gb_trees:get(ObUserId, UserBasicDataTree),
-						{ObUserBasicData, -1}
-					end, gb_sets:to_list(ObSet)),
-			%%下发座位上选手的信息
-			UserDataList2 =
-				lists:foldl(
-					fun({SeatNum, SeatUserId}, TmpPbRoomUserList) ->
-						if
-							SeatUserId =/= undefined ->
-								SeatUserBasicData = gb_trees:get(SeatUserId, UserBasicDataTree),
-								[{SeatUserBasicData, SeatNum}|TmpPbRoomUserList];
-							true -> TmpPbRoomUserList
-						end
-					end, UserDataList, gb_trees:to_list(SeatTree)),
 
 			%%给房间里的其他人发送玩家进入的消息
 			PbJoinRoomPush = #qp_join_room_push{public_data = make_publicdata(UserBasicData)},
 			PushPbBin = qp_proto:encode_qp_packet(PbJoinRoomPush),
 			room_broadcast(UserBasicDataTree, {bin, PushPbBin}),
 			%%给自己发送房间里其他玩家的信息
-			AllRoomUsers =
-				lists:map(
-					fun({TmpUserBasicData, TmpSeatNum}) ->
-						make_roomuser(TmpUserBasicData, TmpSeatNum)
-					end, UserDataList2),
-			PbRoomData = #pb_room_data{cfg = make_roomcfg(RoomCfg),room_users = AllRoomUsers, game_data = undefined},
+
+			PbRoomData = make_pbroomdata(RoomId, RoomCfg, NewObSet, SeatTree, NewUserBasicDataTree, undefined),
 			PbJoinRoomRsp =
 				#qp_join_room_rsp{
 					result = 0,
@@ -335,6 +320,9 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 					end
 			end
 	end;
+wait(get_room_pbdata, _From, #state{room_id = RoomId, room_cfg = RoomCfg, ob_set = ObSet, seat_tree = SeatTree, user_basicdata_tree = UserBasicDataTree} = State) ->
+	PbRoomData = make_pbroomdata(RoomId, RoomCfg, ObSet, SeatTree, UserBasicDataTree, undefined),
+	{reply, {success, PbRoomData}, wait, State};
 wait(Event, _From, State) ->
 	?FILE_LOG_DEBUG("wait, ~p", Event),
 	{reply, ignore, wait, State}.
@@ -415,12 +403,34 @@ handle_info(_Info, StateName, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: normal | shutdown | {shutdown, term()}
 | term(), StateName :: atom(), StateData :: term()) -> term()).
-terminate(_Reason, _StateName, #state{room_id = RoomId, owner_basic_data = OwnerBasicData, room_cfg = RoomCfg, exit_make = ExitMake, user_basicdata_tree = UserBasicDataTree}) ->
+terminate(_Reason, _StateName,
+	#state{
+		room_id = RoomId,
+		owner_basic_data = OwnerBasicData,
+		room_cfg = RoomCfg,
+		ob_set = ObSet,
+		seat_tree = SeatTree,
+		exit_make = ExitMake,
+		user_basicdata_tree = UserBasicDataTree}) ->
 	?FILE_LOG_DEBUG("room_id[~p] dissmiss, make=~p", [RoomId, ExitMake]),
 	%%房间管理器回收房间ID
 	room_mgr:destroy_room(RoomId),
 	%%通知房间发送房间解散的消息
-	room_broadcast(UserBasicDataTree, {dissmiss, {ExitMake, self(), OwnerBasicData:get(id), RoomCfg:get(aa)}}),
+	%%给OB位的返送信息
+	lists:foreach(
+		fun(ObUserId) ->
+			ObUserBasicData = gb_trees:get(ObUserId, UserBasicDataTree),
+			ObUserBasicData:send_room_msg({dissmiss, {ExitMake, self(), -1, OwnerBasicData:get(id), RoomCfg:get(aa)}})
+		end, gb_sets:to_list(ObSet)),
+	lists:foreach(
+		fun({SeatNumber, SeatUserId}) ->
+			if
+				SeatUserId =/= undefined ->
+					SetUserBasicData = gb_trees:get(SeatUserId, UserBasicDataTree),
+					SetUserBasicData:send_room_msg({dissmiss, {ExitMake, self(), SeatNumber, OwnerBasicData:get(id), RoomCfg:get(aa)}});
+				true -> ok
+			end
+		end, gb_trees:to_list(SeatTree)),
 	ok.
 
 %%--------------------------------------------------------------------
@@ -464,6 +474,36 @@ make_roomcfg(RoomCfg) ->
 		is_safe_mode = RoomCfg:get(is_safe_mode),
 		lock_userid_list = RoomCfg:get(lock_id_list)
 	}.
+
+
+make_pbroomdata(RoomId, RoomCfg, ObSet, SeatTree, UserBasicDataTree, GameData) ->
+	UserDataList =
+		lists:map(
+			fun(ObUserId) ->
+				ObUserBasicData = gb_trees:get(ObUserId, UserBasicDataTree),
+				{ObUserBasicData, -1}
+			end, gb_sets:to_list(ObSet)),
+	%%下发座位上选手的信息
+	UserDataList2 =
+		lists:foldl(
+			fun({SeatNum, SeatUserId}, TmpPbRoomUserList) ->
+				if
+					SeatUserId =/= undefined ->
+						SeatUserBasicData = gb_trees:get(SeatUserId, UserBasicDataTree),
+						[{SeatUserBasicData, SeatNum}|TmpPbRoomUserList];
+					true -> TmpPbRoomUserList
+				end
+			end, UserDataList, gb_trees:to_list(SeatTree)),
+	AllRoomUsers =
+		lists:map(
+			fun({TmpUserBasicData, TmpSeatNum}) ->
+				make_roomuser(TmpUserBasicData, TmpSeatNum)
+			end, UserDataList2),
+	#pb_room_data{
+		room_id = RoomId,
+		cfg = make_roomcfg(RoomCfg),
+		room_users = AllRoomUsers,
+		game_data = GameData}.
 
 
 select_seatnum(SeatTree, UserId, SeatNum, IsRandom, LockIdList) ->

@@ -63,7 +63,8 @@
 
 -record(pb_room_user, {user_public_data, seat_number}).
 
--record(pb_room_data, {cfg, room_users, game_data}).
+-record(pb_room_data,
+	{room_id, cfg, room_users, game_data}).
 
 -record(qp_join_room_req, {room_id}).
 
@@ -77,8 +78,7 @@
 	 is_safe_mode, lock_userid_list}).
 
 -record(qp_login_rsp,
-	{state, public_data, private_data, server_scene,
-	 room_data}).
+	{state, public_data, private_data, room_data}).
 
 -record(pb_user_private_data, {room_card_count}).
 
@@ -231,9 +231,6 @@ encode(qp_login_rsp, Record) ->
 			   with_default(Record#qp_login_rsp.private_data, none),
 			   pb_user_private_data, []),
 		      pack(4, optional,
-			   with_default(Record#qp_login_rsp.server_scene, none),
-			   int32, []),
-		      pack(5, optional,
 			   with_default(Record#qp_login_rsp.room_data, none),
 			   pb_room_data, [])]);
 encode(pb_room_cfg, Record) ->
@@ -285,12 +282,15 @@ encode(qp_join_room_req, Record) ->
 			   int32, [])]);
 encode(pb_room_data, Record) ->
     iolist_to_binary([pack(1, required,
+			   with_default(Record#pb_room_data.room_id, none),
+			   int32, []),
+		      pack(2, required,
 			   with_default(Record#pb_room_data.cfg, none),
 			   pb_room_cfg, []),
-		      pack(2, repeated,
+		      pack(3, repeated,
 			   with_default(Record#pb_room_data.room_users, none),
 			   pb_room_user, []),
-		      pack(3, optional,
+		      pack(4, optional,
 			   with_default(Record#pb_room_data.game_data, none),
 			   bytes, [])]);
 encode(pb_room_user, Record) ->
@@ -486,8 +486,7 @@ decode(pb_user_private_data, Bytes)
     Decoded = decode(Bytes, Types, []),
     to_record(pb_user_private_data, Decoded);
 decode(qp_login_rsp, Bytes) when is_binary(Bytes) ->
-    Types = [{5, room_data, pb_room_data, [is_record]},
-	     {4, server_scene, int32, []},
+    Types = [{4, room_data, pb_room_data, [is_record]},
 	     {3, private_data, pb_user_private_data, [is_record]},
 	     {2, public_data, pb_user_public_data, [is_record]},
 	     {1, state, int32, []}],
@@ -519,9 +518,10 @@ decode(qp_join_room_req, Bytes) when is_binary(Bytes) ->
     Decoded = decode(Bytes, Types, []),
     to_record(qp_join_room_req, Decoded);
 decode(pb_room_data, Bytes) when is_binary(Bytes) ->
-    Types = [{3, game_data, bytes, []},
-	     {2, room_users, pb_room_user, [is_record, repeated]},
-	     {1, cfg, pb_room_cfg, [is_record]}],
+    Types = [{4, game_data, bytes, []},
+	     {3, room_users, pb_room_user, [is_record, repeated]},
+	     {2, cfg, pb_room_cfg, [is_record]},
+	     {1, room_id, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(pb_room_data, Decoded);
 decode(pb_room_user, Bytes) when is_binary(Bytes) ->

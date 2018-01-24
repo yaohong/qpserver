@@ -37,7 +37,7 @@
 ]).
 -define(SERVER, ?MODULE).
 -define(TIMER_SPACE, 10).
--define(RECV_TIMEOUT, 30).
+-define(RECV_TIMEOUT, 60).
 
 -record(state, {
 	user_id=undefined,
@@ -300,7 +300,9 @@ terminate(_Reason, _StateName, #state{user_id = UserId, token_data = TokenData} 
 	?FILE_LOG_DEBUG("qp_user ~p, ~p terminate", [UserId, TokenData]),
 	if
 		TokenData =/= undefined ->
-			room_user_mgr:request(UserId, {disconnect, TokenData});
+			Reply = room_user_mgr:request(UserId, {disconnect, TokenData}),
+			?FILE_LOG_DEBUG("disconnect reply=~p", [Reply]),
+			ok;
 		true -> ok
 	end,
 	(State#state.sockModule):close(State#state.sockData),
@@ -336,11 +338,11 @@ packet_handle(#qp_login_req{account = Acc, pwd = Pwd}, wait_login, State) ->
 	case qp_db:account_verify(Acc, Pwd) of
 		{success, UserId, IsCreate} ->
 			?FILE_LOG_DEBUG("account_verify success, user_id=~p, is_create=~p", [UserId, IsCreate]),
-			{success, {TokenData, {CardCount, Nickname, AvatarUrl}}} = room_user_mgr:request(UserId, {login, self()}),
+			{success, {TokenData, {CardCount, Nickname, AvatarUrl, PbRoomData}}} = room_user_mgr:request(UserId, {login, self()}),
 			?FILE_LOG_DEBUG("login success, token_data=~p", [TokenData]),
 			PublicData = #pb_user_public_data{user_id = UserId, nick_name = Nickname, avatar_url = AvatarUrl},
 			PrivateData = #pb_user_private_data{room_card_count = CardCount},
-			Rsp = #qp_login_rsp{state = 0, public_data = PublicData, private_data = PrivateData},
+			Rsp = #qp_login_rsp{state = 0, public_data = PublicData, private_data = PrivateData, room_data = PbRoomData},
 			send_packet(Rsp, State),
 			{login_success, State#state{user_id = UserId, token_data = TokenData}, true};
 		{failed, ErrorCode} ->
@@ -392,17 +394,30 @@ packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, #state{user_id 
 	{login_success, State, true};
 packet_handle(#qp_join_room_req{room_id = RoomId}, login_success, #state{user_id = UserId, token_data = TokenData} = State) ->
 
-	?FILE_LOG_DEBUG("user_id join_room, room_id=~p", [RoomId]),
-	CreateRoomRsp =
-		case room_user_mgr:request(UserId, {TokenData, {join_room, RoomId}}) of
-			{success, RoomId} ->
-				?FILE_LOG_DEBUG("create_room success, room_id=~p", [RoomId]),
-				#qp_create_room_rsp{state = 0, room_id = RoomId};
-			{failed, ErrorCode} ->
-				#qp_create_room_rsp{state = ErrorCode}
-		end,
-	send_packet(CreateRoomRsp, State),
-	{login_success, State, true}.
+	?FILE_LOG_DEBUG("user_id ~p join_room, room_id=~p", [UserId,RoomId]),
+	case room_user_mgr:request(UserId, {TokenData, {join_room, RoomId}}) of
+		success ->
+			?FILE_LOG_DEBUG("user_id ~p join_room success", [UserId]),
+			ok;      %%成功了不发包
+		{failed, ErrorCode} ->
+			%%失败了，发送返回
+			?FILE_LOG_DEBUG("user_id ~p join_room failed, code=~p", [UserId, ErrorCode]),
+			send_packet(#qp_join_room_rsp{result = ErrorCode}, State),
+			ok;
+		ignore ->
+			?FILE_LOG_WARNING("user_id=~p, join_room[~p] ignore", [UserId, RoomId]),
+			ok
+	end,
+	{login_success, State, true};
+packet_handle(#qp_ping_req{}, login_success, #state{user_id = UserId} = State) ->
+
+	?FILE_LOG_DEBUG("user_id ~p ping", [UserId]),
+	send_packet(#qp_ping_rsp{noop = 0}, State),
+	{login_success, State, true};
+packet_handle(Event, login_success, #state{user_id = UserId}) ->
+
+	?FILE_LOG_DEBUG("user_id[~p] event ~p ping", [UserId, Event]),
+	throw({custom, unknown_event}).
 
 
 

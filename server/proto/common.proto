@@ -63,8 +63,7 @@ message qp_login_rsp {
     required int32 state = 1;
     optional pb_user_public_data public_data = 2;
     optional pb_user_private_data private_data = 3;
-    optional int32 server_scene = 4;              //当前在服务器的场景
-    optional pb_room_data room_data = 5;
+    optional pb_room_data room_data = 4;
 
 }
 
@@ -97,9 +96,10 @@ message qp_join_room_req {
 }
 
 message pb_room_data {
-    required pb_room_cfg cfg = 1;
-    repeated pb_room_user room_users = 2;       //如果在房间的话，则为房间的数据信息
-    optional bytes game_data = 3;               //如果游戏开始了则为游戏数据
+    required int32 room_id = 1;
+    required pb_room_cfg cfg = 2;
+    repeated pb_room_user room_users = 3;       //如果在房间的话，则为房间的数据信息
+    optional bytes game_data = 4;               //如果游戏开始了则为游戏数据
 }
 
 message pb_room_user {
@@ -110,8 +110,7 @@ message pb_room_user {
 
 message qp_join_room_rsp {
     required int32 result = 1;
-    optional int32 room_id = 2;
-    optional pb_room_data room_data = 3;
+    optional pb_room_data room_data = 2;
 }
 
 

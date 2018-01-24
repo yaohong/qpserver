@@ -113,8 +113,7 @@ handle_call({request, {UserId, Param}}, From, #state{user_logic_mod = UserLogicM
 		[#game_user{user_pid = UserPid}] when is_pid(UserPid) ->
 			UserLogicMod:post(UserPid, from:new(From), Param),
 			{noreply, State}
-	end,
-	{noreply, State};
+	end;
 handle_call(_Request, _From, State) ->
 	{reply, ok, State}.
 

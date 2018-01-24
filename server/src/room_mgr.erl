@@ -77,6 +77,7 @@ start_link() ->
 	{ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
 	{stop, Reason :: term()} | ignore).
 init([]) ->
+	random:seed(erlang:now()),
 	L = qp_util:random_list(lists:seq(100000, 999999)),
 	ets:new(all_room, [set, protected, named_table, {keypos, #room_data.room_id}]),
 	{success, RoomLogicMod} = qp_config:get_cfg(room_logic_mod),
