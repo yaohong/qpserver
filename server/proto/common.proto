@@ -125,6 +125,7 @@ message qp_sitdown_req {
 
 message qp_sitdown_rsp {
     required int32 result = 1;
+    optional int32 seat_num = 2;
 }
 
 message qp_sitdown_push {
@@ -133,7 +134,7 @@ message qp_sitdown_push {
 }
 
 message qp_standup_req {
-    optional int32 noop = 1;
+    optional int32 seat_num = 1;
 }
 
 message qp_standup_rsp {

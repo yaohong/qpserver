@@ -125,8 +125,8 @@ handle_call({get_room_pid, RoomId}, _From, State) ->
 	Reply =
 		case ets:lookup(all_room, RoomId) of
 			[] -> failed;
-			[#room_data{room_pid = RoomPid}] ->
-				{success, RoomPid}
+			[#room_data{room_pid = RoomPid, cfg = RoomCfg}] ->
+				{success, {RoomPid, RoomCfg}}
 		end,
 	{reply, Reply, State};
 

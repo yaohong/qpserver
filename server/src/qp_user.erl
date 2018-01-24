@@ -414,6 +414,38 @@ packet_handle(#qp_ping_req{}, login_success, #state{user_id = UserId} = State) -
 	?FILE_LOG_DEBUG("user_id ~p ping", [UserId]),
 	send_packet(#qp_ping_rsp{noop = 0}, State),
 	{login_success, State, true};
+packet_handle(#qp_sitdown_req{seat_num = SeatNum}, login_success, #state{user_id = UserId, token_data = TokenData} = State) ->
+	?FILE_LOG_DEBUG("user_id=~p sitdown seat_num=~p", [UserId, SeatNum]),
+	case room_user_mgr:request(UserId, {TokenData, {sitdown, SeatNum}}) of
+		{success, ServerSeatNum} ->
+			?FILE_LOG_DEBUG("user_id ~p sitdown success, ServerSeatNum=~p", [UserId, ServerSeatNum]),
+			send_packet(#qp_sitdown_rsp{result = 0, seat_num = ServerSeatNum}, State),
+			ok;
+		{failed, ErrorCode} ->
+			?FILE_LOG_DEBUG("user_id ~p sitdown failed, code=~p", [UserId, ErrorCode]),
+			send_packet(#qp_sitdown_rsp{result = ErrorCode}, State),
+			ok;
+		ignore ->
+			?FILE_LOG_WARNING("user_id=~p, sitdown[~p] ignore", [UserId, SeatNum]),
+			ok
+	end,
+	{login_success, State, true};
+packet_handle(#qp_standup_req{seat_num = SeatNum}, login_success, #state{user_id = UserId, token_data = TokenData} = State) ->
+	?FILE_LOG_DEBUG("user_id=~p standup seat_num=~p", [UserId, SeatNum]),
+	case room_user_mgr:request(UserId, {TokenData, {standup, SeatNum}}) of
+		success ->
+			?FILE_LOG_DEBUG("user_id ~p standup success", [UserId]),
+			send_packet(#qp_standup_rsp{state = 0}, State),
+			ok;
+		{failed, ErrorCode} ->
+			?FILE_LOG_DEBUG("user_id ~p standup failed, code=~p", [UserId, ErrorCode]),
+			send_packet(#qp_standup_rsp{state = ErrorCode}, State),
+			ok;
+		ignore ->
+			?FILE_LOG_WARNING("user_id=~p, standup[~p] ignore", [UserId, SeatNum]),
+			ok
+	end,
+	{login_success, State, true};
 packet_handle(Event, login_success, #state{user_id = UserId}) ->
 
 	?FILE_LOG_DEBUG("user_id[~p] event ~p ping", [UserId, Event]),

@@ -40,7 +40,7 @@
 
 	room_logic_mod,
 
-	room_pid :: pid() | undefined      %%当前缩在房间的进程PID
+	room_info :: {pid(), IsAA :: boolean(), OwnerUserId :: integer()} | undefined      %%当前缩在房间的进程PID
 
 }).
 
@@ -103,7 +103,7 @@ init([UserId]) ->
 					token_data = undefined,
 					room_logic_mod = RoomLogicMod,
 
-					room_pid = undefined
+					room_info = undefined
 				}};
 		{failed, DbErrorCode} ->
 			?FILE_LOG_ERROR("load_game_data failed, ~p", [DbErrorCode]),
@@ -191,7 +191,7 @@ hall({From, {ReqTokenData, {create_room, {RoomName, AA, DoubleDownScore, IsLaizi
 				throw({custom, ?LOGIC_ERROR_CARD_NOT_ENOUGH});
 			true -> ok
 		end,
-		RoomCfg = ss510k_room_cfg:new(RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockIdList),
+		RoomCfg = ss510k_room_cfg:new(UserId, RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockIdList),
 		UserBasicData = user_basic_data:new(UserId, self(), Nickname, AvatarUrl),
 		{success, {RoomId, RoomPid}} = room_mgr:create_room(UserBasicData, RoomCfg),
 		success = RoomLogicMod:join_room(RoomPid, UserBasicData),
@@ -199,7 +199,7 @@ hall({From, {ReqTokenData, {create_room, {RoomName, AA, DoubleDownScore, IsLaizi
 		NewLockCardCount = LockCardCount + ConsumeCardCount,
 		?FILE_LOG_DEBUG("user_id[~p] create_room_success, lock_card_count[~p=>~p] hall=>room, room_pid=~p", [
 			UserId, LockCardCount, NewLockCardCount, RoomPid]),
-		{next_state, room, State#state{lock_card_count = NewLockCardCount, room_pid = RoomPid}}
+		{next_state, room, State#state{lock_card_count = NewLockCardCount, room_info = {RoomPid, AA, UserBasicData}}}
 	catch
 		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
 			From:reply({failed, ErrorCode}),
@@ -222,13 +222,13 @@ hall({From, {ReqTokenData, {join_room, RoomId}}},
 		compare_token(ReqTokenData, TokenData),
 
 		UserBasicData = user_basic_data:new(UserId, self(), Nickname, AvatarUrl),
-		RoomPid = get_room_pid(RoomId),
+		{RoomPid, RoomCfg} = get_room_pid(RoomId),
 
 		success = RoomLogicMod:join_room(RoomPid, UserBasicData),
 		From:reply(success),
 
 		?FILE_LOG_DEBUG("user_id[~p] join_room_success", [UserId]),
-		{next_state, room, State#state{room_pid = RoomPid}}
+		{next_state, room, State#state{room_info = {RoomPid, RoomCfg:get(aa), RoomCfg:get(owner_userid)}}}
 	catch
 		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
 			From:reply({failed, ErrorCode}),
@@ -238,11 +238,12 @@ hall({From, {ReqTokenData, {join_room, RoomId}}},
 			From:reply({failed, ?SYSTEM_ERROR}),
 			{next_state, hall, State}
 	end;
-hall(Event, State) ->
+hall({From, Event}, State) ->
 	?FILE_LOG_WARNING("room hall, event=~p", [Event]),
+	From:reply(ignore),
 	{next_state, hall, State}.
 
-room({From, {login, QpUserPid}}, #state{token_data = OldTokenData, card_count = CardCount, nickname = Nickname, avatar_url = AvatarUrl, room_pid = RoomPid} = State) ->
+room({From, {login, QpUserPid}}, #state{token_data = OldTokenData, card_count = CardCount, nickname = Nickname, avatar_url = AvatarUrl, room_info = {RoomPid, _, _}} = State) ->
 	try
 		if
 			OldTokenData =/= undefined ->
@@ -278,6 +279,63 @@ room({From, {disconnect, ReqTokenData}}, #state{token_data = TokenData, user_id 
 		%%%%%%%%%%%%%%%%%%%%%
 		?FILE_LOG_DEBUG("[room]user_id=~p, ~p, disconnect", [UserId, TokenData]),
 		{next_state, room, State#state{token_data = undefined}}
+	catch
+		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
+			From:reply({failed, ErrorCode}),
+			{next_state, room, State};
+		What:Type ->
+			?printSystemError(What, Type),
+			From:reply({failed, ?SYSTEM_ERROR}),
+			{next_state, room, State}
+	end;
+room({From, {ReqTokenData, {sitdown, SeatNum}}},
+	#state{token_data = TokenData, user_id = UserId, room_info = {RoomPid, IsAA, OwnerUserId}, card_count = CardCount, lock_card_count = LockCardCount} = State) ->
+	try
+		compare_token(ReqTokenData, TokenData),
+		ValidCardCount = valid_card_count(CardCount, LockCardCount),
+		ConsumeCardCount =
+			if
+				OwnerUserId =:= UserId -> 0;            %%房间所有者在创建房间时已经锁定
+				IsAA =:= false -> 0;                    %%房主全包了
+				true -> 1                               %%需要消耗一张
+			end,
+		if
+			ValidCardCount < LockCardCount ->
+				%%房卡不够不能开
+				?FILE_LOG_WARNING("need card_count=~p, valid_card_count=~p", [LockCardCount, ValidCardCount]),
+				throw({custom, ?LOGIC_ERROR_CARD_NOT_ENOUGH});
+			true -> ok
+		end,
+		ServerSeatNum = sitdown(RoomPid, UserId, SeatNum),
+		NewLockCardCount = LockCardCount + ConsumeCardCount,
+		From:reply({success, ServerSeatNum}),
+		?FILE_LOG_DEBUG("[room]user_id=~p, sitdown success, serverSeatNum=~p, lockCardCount[~p=>~p]", [UserId, ServerSeatNum, LockCardCount, NewLockCardCount]),
+		{next_state, room, State#state{lock_card_count = NewLockCardCount}}
+	catch
+		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
+			From:reply({failed, ErrorCode}),
+			{next_state, room, State};
+		What:Type ->
+			?printSystemError(What, Type),
+			From:reply({failed, ?SYSTEM_ERROR}),
+			{next_state, room, State}
+	end;
+room({From, {ReqTokenData, {standup, SeatNum}}},
+	#state{token_data = TokenData, user_id = UserId, room_info = {RoomPid, IsAA, OwnerUserId}, lock_card_count = LockCardCount} = State) ->
+	try
+		compare_token(ReqTokenData, TokenData),
+
+		NewLockCardCount =
+			if
+				OwnerUserId =:= UserId -> LockCardCount;            %%房间所有者在创建房间时已经锁定
+				IsAA =:= false -> LockCardCount;                    %%房主全包了
+				true -> LockCardCount - 1                        %%需要消耗一张
+			end,
+
+		success = standup(RoomPid, UserId, SeatNum),
+		From:reply(success),
+		?FILE_LOG_DEBUG("[room]user_id=~p, standup success, lockCardCount[~p=>~p]", [UserId, LockCardCount, NewLockCardCount]),
+		{next_state, room, State#state{lock_card_count = NewLockCardCount}}
 	catch
 		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
 			From:reply({failed, ErrorCode}),
@@ -386,7 +444,7 @@ handle_info({room_msg, {bin, Bin}}, room, #state{token_data = TokenData} = State
 	{next_state, room, State};
 handle_info(
 	{room_msg, {dissmiss, {ExitMake, DissmissRoomPid, SeatNumber, RoomOwnerId, IsAA}}}, room,
-	#state{user_id = UserId, room_pid = CurrentRoomPid, card_count = CardCount, lock_card_count = LockCardCount} = State) ->
+	#state{user_id = UserId, room_info = {CurrentRoomPid, _, _}, card_count = CardCount, lock_card_count = LockCardCount} = State) ->
 	?FILE_LOG_DEBUG(
 		"room_dissmiss, exitMake=~p, dissmissRoomPid=~p, seat_number=~p, roomOwnerId=~p, isAA=~p user[~p] room=>hall",
 		[ExitMake, DissmissRoomPid, SeatNumber, RoomOwnerId, IsAA, UserId]),
@@ -425,7 +483,7 @@ handle_info(
 				[UserId, RoomOwnerId, CardCount, NewCardCount, LockCardCount, NewLockCardCount]),
 			?FILE_LOG_DEBUG("user_id=~p room=>hall.", [UserId]),
 			%%如果当前有qp_user的绑定
-			{next_state, hall, State#state{room_pid = undefined, card_count = NewCardCount, lock_card_count = NewLockCardCount}}
+			{next_state, hall, State#state{room_info = undefined, card_count = NewCardCount, lock_card_count = NewLockCardCount}}
 	end;
 handle_info(_Info, StateName, State) ->
 	{next_state, StateName, State}.
@@ -474,7 +532,7 @@ compare_token(LTokenData, RTokenData) ->
 
 get_room_pid(RoomId) ->
 	case room_mgr:get_room_pid(RoomId) of
-		{success, RoomPid} -> RoomPid;
+		{success, {RoomPid, RoomCfg}} -> {RoomPid, RoomCfg};
 		failed -> throw({custom, ?LOGIC_ERROR_GET_ROOM_PID_FAILED})
 	end.
 
@@ -485,4 +543,17 @@ get_room_pbdata(RoomPid) ->
 		Other ->
 			?FILE_LOG_WARNING("get_room_info failed, ~p", [Other]),
 			throw({custom, ?LOGIC_ERROR_GET_ROOM_INFO_FAILED})
+	end.
+
+sitdown(RoomPid, UserId, SeatNum) ->
+	case ss510k_room:sitdown(RoomPid, UserId, SeatNum) of
+		{success, ServerSeatNum} -> ServerSeatNum;
+		{failed, ErrorCode} ->
+			throw({custom, ErrorCode})
+	end.
+
+standup(RoomPid, UserId, SeatNum) ->
+	case ss510k_room:standup(RoomPid, UserId, SeatNum) of
+		success -> success;
+		{failed, ErrorCode} -> throw({custom, ErrorCode})
 	end.

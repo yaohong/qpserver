@@ -49,11 +49,11 @@
 
 -record(qp_standup_rsp, {state}).
 
--record(qp_standup_req, {noop}).
+-record(qp_standup_req, {seat_num}).
 
 -record(qp_sitdown_push, {seat_num, user_id}).
 
--record(qp_sitdown_rsp, {result}).
+-record(qp_sitdown_rsp, {result, seat_num}).
 
 -record(qp_sitdown_req, {seat_num}).
 
@@ -321,6 +321,9 @@ encode(qp_sitdown_req, Record) ->
 encode(qp_sitdown_rsp, Record) ->
     iolist_to_binary([pack(1, required,
 			   with_default(Record#qp_sitdown_rsp.result, none),
+			   int32, []),
+		      pack(2, optional,
+			   with_default(Record#qp_sitdown_rsp.seat_num, none),
 			   int32, [])]);
 encode(qp_sitdown_push, Record) ->
     iolist_to_binary([pack(1, required,
@@ -331,7 +334,7 @@ encode(qp_sitdown_push, Record) ->
 			   int32, [])]);
 encode(qp_standup_req, Record) ->
     iolist_to_binary([pack(1, optional,
-			   with_default(Record#qp_standup_req.noop, none),
+			   with_default(Record#qp_standup_req.seat_num, none),
 			   int32, [])]);
 encode(qp_standup_rsp, Record) ->
     iolist_to_binary([pack(1, required,
@@ -546,7 +549,8 @@ decode(qp_sitdown_req, Bytes) when is_binary(Bytes) ->
     Decoded = decode(Bytes, Types, []),
     to_record(qp_sitdown_req, Decoded);
 decode(qp_sitdown_rsp, Bytes) when is_binary(Bytes) ->
-    Types = [{1, result, int32, []}],
+    Types = [{2, seat_num, int32, []},
+	     {1, result, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(qp_sitdown_rsp, Decoded);
 decode(qp_sitdown_push, Bytes) when is_binary(Bytes) ->
@@ -555,7 +559,7 @@ decode(qp_sitdown_push, Bytes) when is_binary(Bytes) ->
     Decoded = decode(Bytes, Types, []),
     to_record(qp_sitdown_push, Decoded);
 decode(qp_standup_req, Bytes) when is_binary(Bytes) ->
-    Types = [{1, noop, int32, []}],
+    Types = [{1, seat_num, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(qp_standup_req, Decoded);
 decode(qp_standup_rsp, Bytes) when is_binary(Bytes) ->

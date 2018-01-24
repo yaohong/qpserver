@@ -235,7 +235,11 @@ wait({sitdown, {UserId, SeatNum}}, _From, State) ->
 						{_, ErrorCode} when ErrorCode > 0 ->
 							{reply, {failed, ErrorCode}, wait, State};
 						{NewSeatTree, SelectSeatNum, 0} ->
-							%%如果四个座位全满了，则游戏开始
+							%%广播所有人坐下成功
+							SitdownPush = #qp_sitdown_push{seat_num = SelectSeatNum, user_id = UserId},
+							PushPbBin = qp_proto:encode_qp_packet(SitdownPush),
+							room_broadcast(UserBasicDataTree, {bin, PushPbBin}, UserId),
+							%%告诉本人成功
 							{reply, {success, SelectSeatNum}, wait, State#state{seat_tree = NewSeatTree, ob_set = gb_sets:delete(UserId, ObSet)}}
 					end
 			end
