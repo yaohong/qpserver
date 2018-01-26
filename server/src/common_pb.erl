@@ -39,11 +39,11 @@
 
 -record(qp_game_data, {game_data}).
 
--record(qp_exit_room_push, {user_id}).
+-record(qp_exit_room_push, {user_id, seat_num}).
 
 -record(qp_exit_room_rsp, {result}).
 
--record(qp_exit_room_req, {noop}).
+-record(qp_exit_room_req, {seat_num}).
 
 -record(qp_standup_push, {seat_num}).
 
@@ -345,8 +345,8 @@ encode(qp_standup_push, Record) ->
 			   with_default(Record#qp_standup_push.seat_num, none),
 			   int32, [])]);
 encode(qp_exit_room_req, Record) ->
-    iolist_to_binary([pack(1, optional,
-			   with_default(Record#qp_exit_room_req.noop, none),
+    iolist_to_binary([pack(1, required,
+			   with_default(Record#qp_exit_room_req.seat_num, none),
 			   int32, [])]);
 encode(qp_exit_room_rsp, Record) ->
     iolist_to_binary([pack(1, required,
@@ -355,6 +355,10 @@ encode(qp_exit_room_rsp, Record) ->
 encode(qp_exit_room_push, Record) ->
     iolist_to_binary([pack(1, required,
 			   with_default(Record#qp_exit_room_push.user_id, none),
+			   int32, []),
+		      pack(2, required,
+			   with_default(Record#qp_exit_room_push.seat_num,
+					none),
 			   int32, [])]);
 encode(qp_game_data, Record) ->
     iolist_to_binary([pack(1, required,
@@ -571,7 +575,7 @@ decode(qp_standup_push, Bytes) when is_binary(Bytes) ->
     Decoded = decode(Bytes, Types, []),
     to_record(qp_standup_push, Decoded);
 decode(qp_exit_room_req, Bytes) when is_binary(Bytes) ->
-    Types = [{1, noop, int32, []}],
+    Types = [{1, seat_num, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(qp_exit_room_req, Decoded);
 decode(qp_exit_room_rsp, Bytes) when is_binary(Bytes) ->
@@ -580,7 +584,8 @@ decode(qp_exit_room_rsp, Bytes) when is_binary(Bytes) ->
     to_record(qp_exit_room_rsp, Decoded);
 decode(qp_exit_room_push, Bytes)
     when is_binary(Bytes) ->
-    Types = [{1, user_id, int32, []}],
+    Types = [{2, seat_num, int32, []},
+	     {1, user_id, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(qp_exit_room_push, Decoded);
 decode(qp_game_data, Bytes) when is_binary(Bytes) ->

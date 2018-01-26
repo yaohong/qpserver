@@ -199,7 +199,7 @@ hall({From, {ReqTokenData, {create_room, {RoomName, AA, DoubleDownScore, IsLaizi
 		NewLockCardCount = LockCardCount + ConsumeCardCount,
 		?FILE_LOG_DEBUG("user_id[~p] create_room_success, lock_card_count[~p=>~p] hall=>room, room_pid=~p", [
 			UserId, LockCardCount, NewLockCardCount, RoomPid]),
-		{next_state, room, State#state{lock_card_count = NewLockCardCount, room_info = {RoomPid, AA, UserBasicData}}}
+		{next_state, room, State#state{lock_card_count = NewLockCardCount, room_info = {RoomPid, AA, UserId}}}
 	catch
 		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
 			From:reply({failed, ErrorCode}),
@@ -345,6 +345,31 @@ room({From, {ReqTokenData, {standup, SeatNum}}},
 			From:reply({failed, ?SYSTEM_ERROR}),
 			{next_state, room, State}
 	end;
+room({From, {ReqTokenData, {exitroom, SeatNum}}},
+	#state{token_data = TokenData, user_id = UserId, room_info = {RoomPid, IsAA, OwnerUserId}, lock_card_count = LockCardCount} = State) ->
+	try
+		compare_token(ReqTokenData, TokenData),
+
+		NewLockCardCount =
+			if
+				OwnerUserId =:= UserId -> LockCardCount;            %%房间所有者在创建房间时已经锁定
+				IsAA =:= false -> LockCardCount;                    %%房主全包了
+				true -> LockCardCount - 1                        %%需要消耗一张
+			end,
+
+		success = exitroom(RoomPid, UserId, SeatNum),
+		From:reply(success),
+		?FILE_LOG_DEBUG("[room]user_id=~p, exitroom success, lockCardCount[~p=>~p]", [UserId, LockCardCount, NewLockCardCount]),
+		{next_state, hall, State#state{lock_card_count = NewLockCardCount}}
+	catch
+		throw:{custom, ErrorCode} when is_integer(ErrorCode) ->
+			From:reply({failed, ErrorCode}),
+			{next_state, room, State};
+		What:Type ->
+			?printSystemError(What, Type),
+			From:reply({failed, ?SYSTEM_ERROR}),
+			{next_state, room, State}
+	end;
 room({From, Event}, State) ->
 	?FILE_LOG_WARNING("room_room, event=~p", [Event]),
 	From:reply(ignore),
@@ -440,7 +465,11 @@ handle_sync_event(_Event, _From, StateName, State) ->
 	{stop, Reason :: normal | term(), NewStateData :: term()}).
 handle_info({room_msg, {bin, Bin}}, room, #state{token_data = TokenData} = State) ->
 	%%只有在房间才接收room_bin
-	TokenData:send_bin(Bin),
+	if
+		TokenData =/= undefined ->
+			TokenData:send_bin(Bin);
+		true -> ok
+	end,
 	{next_state, room, State};
 handle_info(
 	{room_msg, {dissmiss, {ExitMake, DissmissRoomPid, SeatNumber, RoomOwnerId, IsAA}}}, room,
@@ -554,6 +583,13 @@ sitdown(RoomPid, UserId, SeatNum) ->
 
 standup(RoomPid, UserId, SeatNum) ->
 	case ss510k_room:standup(RoomPid, UserId, SeatNum) of
+		success -> success;
+		{failed, ErrorCode} -> throw({custom, ErrorCode})
+	end.
+
+
+exitroom(RoomPid, UserId, SeatNum) ->
+	case ss510k_room:exitroom(RoomPid, UserId, SeatNum) of
 		success -> success;
 		{failed, ErrorCode} -> throw({custom, ErrorCode})
 	end.

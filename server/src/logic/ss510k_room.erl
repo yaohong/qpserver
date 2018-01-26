@@ -122,6 +122,7 @@ start_link(RoomId, OwnerBasicData, RoomCfg) ->
 	{stop, Reason :: term()} | ignore).
 init([RoomId, OwnerBasicData, RoomCfg]) ->
 	%%启动定时器，多久没开始游戏，自动退出
+	random:seed(erlang:now()),
 	CurrentTime = qp_util:timestamp(),
 	timer_manager:addDelayTask(RoomId, CurrentTime + ?CHECK_GAME_WHETHER_TO_START_TIMEOUT, ?MODULE, cb_check_game_whethertostart, [self()]),
 	?FILE_LOG_DEBUG("room_init room_id=~p, owner_basic_data=~p, room_cfg=~p", [RoomId, OwnerBasicData, RoomCfg]),
@@ -300,7 +301,7 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 							NewUserBasicDataTree = gb_trees:delete(UserId, UserBasicDataTree),
 
 							%%给其他人广播玩家退出房间的消息
-							PbPush = #qp_exit_room_push{user_id = UserId},
+							PbPush = #qp_exit_room_push{user_id = UserId, seat_num = -1},
 							room_broadcast(NewUserBasicDataTree, {bin, qp_proto:encode_qp_packet(PbPush)}),
 
 							{reply, success, wait, State#state{ob_set = NewObSet, user_basicdata_tree = NewUserBasicDataTree}}
@@ -311,7 +312,7 @@ wait({exitroom, {UserId, SeatNum}}, _From, State) ->
 						{value, UserId} ->
 							NewSeatTree = gb_trees:update(SeatNum, undefined, SeatTree),
 							NewUserBasicDataTree = gb_trees:delete(UserId, UserBasicDataTree),
-							PbPush = #qp_exit_room_push{user_id = UserId},
+							PbPush = #qp_exit_room_push{user_id = UserId, seat_num = SeatNum},
 							room_broadcast(NewUserBasicDataTree, {bin, qp_proto:encode_qp_packet(PbPush)}),
 							{reply, success, wait, State#state{seat_tree = NewSeatTree, user_basicdata_tree = NewUserBasicDataTree}};
 						{value, OtherUserId} ->

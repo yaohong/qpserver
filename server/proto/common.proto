@@ -148,7 +148,7 @@ message qp_standup_push {
 
 
 message qp_exit_room_req {
-    optional int32 noop = 1;
+    required int32 seat_num = 1;
 }
 
 
@@ -158,6 +158,7 @@ message qp_exit_room_rsp {
 
 message qp_exit_room_push {
     required int32 user_id = 1;
+    required int32 seat_num = 2;
 }
 
 

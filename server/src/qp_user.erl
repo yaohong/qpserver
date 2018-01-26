@@ -446,6 +446,22 @@ packet_handle(#qp_standup_req{seat_num = SeatNum}, login_success, #state{user_id
 			ok
 	end,
 	{login_success, State, true};
+packet_handle(#qp_exit_room_req{seat_num = SeatNum}, login_success, #state{user_id = UserId, token_data = TokenData} = State) ->
+	?FILE_LOG_DEBUG("user_id=~p exitroom seat_num=~p", [UserId, SeatNum]),
+	case room_user_mgr:request(UserId, {TokenData, {exitroom, SeatNum}}) of
+		success ->
+			?FILE_LOG_DEBUG("user_id ~p exitroom success", [UserId]),
+			send_packet(#qp_exit_room_rsp{result = 0}, State),
+			ok;
+		{failed, ErrorCode} ->
+			?FILE_LOG_DEBUG("user_id ~p exitroom failed, code=~p", [UserId, ErrorCode]),
+			send_packet(#qp_exit_room_rsp{result = ErrorCode}, State),
+			ok;
+		ignore ->
+			?FILE_LOG_WARNING("user_id=~p, exitroom[~p] ignore", [UserId, SeatNum]),
+			ok
+	end,
+	{login_success, State, true};
 packet_handle(Event, login_success, #state{user_id = UserId}) ->
 
 	?FILE_LOG_DEBUG("user_id[~p] event ~p ping", [UserId, Event]),
