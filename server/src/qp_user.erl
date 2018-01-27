@@ -274,13 +274,25 @@ handle_info(timeout_check, StateName, #state{last_recv_packet_time = LastRecvPac
 				qp_user, timer_callback, [self()]),
 			{next_state, StateName, State}
 	end;
-handle_info({bin, Bin}, StateName, State) ->
+handle_info({logic_msg, {bin, Bin}}, login_success, State) ->
 	send_bin(Bin, State),
-	{next_state, StateName, State};
-handle_info(kick, StateName, State) ->
-	?FILE_LOG_DEBUG("kick ~p ~p", [self(), StateName]),
+	{next_state, login_success, State};
+
+handle_info({logic_msg, {room_dissmiss, {RoomId, ExitType}}}, login_success, #state{user_id = UserId} = State) ->
+	?FILE_LOG_DEBUG("user_id=~p, room_dissmiss, room_id=~p, exit_type=~p", [UserId, RoomId, ExitType]),
+	send_packet(#qp_room_dissmiss{room_id = RoomId, type = ExitType}, State),
+	{next_state, login_success, State};
+
+handle_info({logic_msg, {room_kick, {RoomId, KickType}}}, login_success, #state{user_id = UserId} = State) ->
+	?FILE_LOG_DEBUG("user_id=~p, room_kick, room_id=~p, kick_type=~p", [UserId, RoomId, KickType]),
+	send_packet(#qp_room_kick{room_id = RoomId, user_id = UserId, type = KickType}, State),
+	{next_state, login_success, State};
+
+handle_info(kick, login_success, State) ->
+	?FILE_LOG_DEBUG("kick ~p ~p", [self(), login_success]),
 	{stop, normal, State#state{token_data = undefined}};
 handle_info(_Info, StateName, State) ->
+	?FILE_LOG_WARNING("unkown ino ~p, statName=~p", [_Info, StateName]),
 	{next_state, StateName, State}.
 
 %%--------------------------------------------------------------------

@@ -59,6 +59,14 @@ encode_qp_packet(Packet) when is_record(Packet, qp_exit_room_rsp)  ->
     encode_qp_packet(?CMD_QP_EXIT_ROOM_RSP, common_pb:encode_qp_exit_room_rsp(Packet));
 encode_qp_packet(Packet) when is_record(Packet, qp_exit_room_push)  ->
     encode_qp_packet(?CMD_QP_EXIT_ROOM_PUSH, common_pb:encode_qp_exit_room_push(Packet));
+encode_qp_packet(Packet) when is_record(Packet, qp_room_dissmiss)  ->
+    encode_qp_packet(?CMD_QP_ROOM_DISSMISS, common_pb:encode_qp_room_dissmiss(Packet));
+
+encode_qp_packet(Packet) when is_record(Packet, qp_room_kick)  ->
+    encode_qp_packet(?CMD_QP_ROOM_KICK, common_pb:encode_qp_room_kick(Packet));
+encode_qp_packet(Packet) when is_record(Packet, qp_user_online_state_change)  ->
+    encode_qp_packet(?CMD_QP_USER_ONLINE_STATE_CHANGE, common_pb:encode_qp_user_online_state_change(Packet));
+
 encode_qp_packet(Packet) when is_record(Packet, qp_game_data)  ->
     encode_qp_packet(?CMD_QP_GAME_DATA, common_pb:encode_qp_game_data(Packet));
 encode_qp_packet(Packet) when is_record(Packet, qp_ping_rsp)  ->

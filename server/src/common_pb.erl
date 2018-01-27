@@ -7,6 +7,10 @@
 -export([encode_qp_ping_rsp/1, decode_qp_ping_rsp/1,
 	 encode_qp_ping_req/1, decode_qp_ping_req/1,
 	 encode_qp_game_data/1, decode_qp_game_data/1,
+	 encode_qp_user_online_state_change/1,
+	 decode_qp_user_online_state_change/1,
+	 encode_qp_room_kick/1, decode_qp_room_kick/1,
+	 encode_qp_room_dissmiss/1, decode_qp_room_dissmiss/1,
 	 encode_qp_exit_room_push/1, decode_qp_exit_room_push/1,
 	 encode_qp_exit_room_rsp/1, decode_qp_exit_room_rsp/1,
 	 encode_qp_exit_room_req/1, decode_qp_exit_room_req/1,
@@ -38,6 +42,13 @@
 -record(qp_ping_req, {noop}).
 
 -record(qp_game_data, {game_data}).
+
+-record(qp_user_online_state_change,
+	{room_id, user_id, online}).
+
+-record(qp_room_kick, {room_id, user_id, type}).
+
+-record(qp_room_dissmiss, {room_id, type}).
 
 -record(qp_exit_room_push, {user_id, seat_num}).
 
@@ -100,6 +111,18 @@ encode_qp_ping_req(Record)
 encode_qp_game_data(Record)
     when is_record(Record, qp_game_data) ->
     encode(qp_game_data, Record).
+
+encode_qp_user_online_state_change(Record)
+    when is_record(Record, qp_user_online_state_change) ->
+    encode(qp_user_online_state_change, Record).
+
+encode_qp_room_kick(Record)
+    when is_record(Record, qp_room_kick) ->
+    encode(qp_room_kick, Record).
+
+encode_qp_room_dissmiss(Record)
+    when is_record(Record, qp_room_dissmiss) ->
+    encode(qp_room_dissmiss, Record).
 
 encode_qp_exit_room_push(Record)
     when is_record(Record, qp_exit_room_push) ->
@@ -360,6 +383,36 @@ encode(qp_exit_room_push, Record) ->
 			   with_default(Record#qp_exit_room_push.seat_num,
 					none),
 			   int32, [])]);
+encode(qp_room_dissmiss, Record) ->
+    iolist_to_binary([pack(1, required,
+			   with_default(Record#qp_room_dissmiss.room_id, none),
+			   int32, []),
+		      pack(2, required,
+			   with_default(Record#qp_room_dissmiss.type, none),
+			   int32, [])]);
+encode(qp_room_kick, Record) ->
+    iolist_to_binary([pack(1, required,
+			   with_default(Record#qp_room_kick.room_id, none),
+			   int32, []),
+		      pack(2, required,
+			   with_default(Record#qp_room_kick.user_id, none),
+			   int32, []),
+		      pack(3, required,
+			   with_default(Record#qp_room_kick.type, none), int32,
+			   [])]);
+encode(qp_user_online_state_change, Record) ->
+    iolist_to_binary([pack(1, required,
+			   with_default(Record#qp_user_online_state_change.room_id,
+					none),
+			   int32, []),
+		      pack(2, required,
+			   with_default(Record#qp_user_online_state_change.user_id,
+					none),
+			   int32, []),
+		      pack(3, required,
+			   with_default(Record#qp_user_online_state_change.online,
+					none),
+			   bool, [])]);
 encode(qp_game_data, Record) ->
     iolist_to_binary([pack(1, required,
 			   with_default(Record#qp_game_data.game_data, none),
@@ -400,6 +453,16 @@ decode_qp_ping_req(Bytes) when is_binary(Bytes) ->
 
 decode_qp_game_data(Bytes) when is_binary(Bytes) ->
     decode(qp_game_data, Bytes).
+
+decode_qp_user_online_state_change(Bytes)
+    when is_binary(Bytes) ->
+    decode(qp_user_online_state_change, Bytes).
+
+decode_qp_room_kick(Bytes) when is_binary(Bytes) ->
+    decode(qp_room_kick, Bytes).
+
+decode_qp_room_dissmiss(Bytes) when is_binary(Bytes) ->
+    decode(qp_room_dissmiss, Bytes).
 
 decode_qp_exit_room_push(Bytes) when is_binary(Bytes) ->
     decode(qp_exit_room_push, Bytes).
@@ -588,6 +651,21 @@ decode(qp_exit_room_push, Bytes)
 	     {1, user_id, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(qp_exit_room_push, Decoded);
+decode(qp_room_dissmiss, Bytes) when is_binary(Bytes) ->
+    Types = [{2, type, int32, []}, {1, room_id, int32, []}],
+    Decoded = decode(Bytes, Types, []),
+    to_record(qp_room_dissmiss, Decoded);
+decode(qp_room_kick, Bytes) when is_binary(Bytes) ->
+    Types = [{3, type, int32, []}, {2, user_id, int32, []},
+	     {1, room_id, int32, []}],
+    Decoded = decode(Bytes, Types, []),
+    to_record(qp_room_kick, Decoded);
+decode(qp_user_online_state_change, Bytes)
+    when is_binary(Bytes) ->
+    Types = [{3, online, bool, []}, {2, user_id, int32, []},
+	     {1, room_id, int32, []}],
+    Decoded = decode(Bytes, Types, []),
+    to_record(qp_user_online_state_change, Decoded);
 decode(qp_game_data, Bytes) when is_binary(Bytes) ->
     Types = [{1, game_data, bytes, []}],
     Decoded = decode(Bytes, Types, []),
@@ -779,6 +857,25 @@ to_record(qp_exit_room_push, DecodedTuples) ->
 					 Record, Name, Val)
 		end,
 		#qp_exit_room_push{}, DecodedTuples);
+to_record(qp_room_dissmiss, DecodedTuples) ->
+    lists:foldl(fun ({_FNum, Name, Val}, Record) ->
+			set_record_field(record_info(fields, qp_room_dissmiss),
+					 Record, Name, Val)
+		end,
+		#qp_room_dissmiss{}, DecodedTuples);
+to_record(qp_room_kick, DecodedTuples) ->
+    lists:foldl(fun ({_FNum, Name, Val}, Record) ->
+			set_record_field(record_info(fields, qp_room_kick),
+					 Record, Name, Val)
+		end,
+		#qp_room_kick{}, DecodedTuples);
+to_record(qp_user_online_state_change, DecodedTuples) ->
+    lists:foldl(fun ({_FNum, Name, Val}, Record) ->
+			set_record_field(record_info(fields,
+						     qp_user_online_state_change),
+					 Record, Name, Val)
+		end,
+		#qp_user_online_state_change{}, DecodedTuples);
 to_record(qp_game_data, DecodedTuples) ->
     lists:foldl(fun ({_FNum, Name, Val}, Record) ->
 			set_record_field(record_info(fields, qp_game_data),

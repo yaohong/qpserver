@@ -17,7 +17,7 @@
 
 	value/1,
 
-	send_bin/2
+	send_msg/2
 ]).
 
 new(QpUserPid) when is_pid(QpUserPid) ->
@@ -32,8 +32,8 @@ kick({?MODULE, [QpUserPid, _]}) ->
 value({?MODULE, Value}) -> Value.
 
 
-send_bin(Bin, {?MODULE, [QpUserPid, _]}) ->
-	catch QpUserPid ! {bin, Bin}.
+send_msg(Msg, {?MODULE, [QpUserPid, _]}) ->
+	catch QpUserPid ! {logic_msg, Msg}.
 
 
 compare(TokenData,{?MODULE, RValue}) ->

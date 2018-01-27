@@ -467,16 +467,30 @@ handle_info({room_msg, {bin, Bin}}, room, #state{token_data = TokenData} = State
 	%%只有在房间才接收room_bin
 	if
 		TokenData =/= undefined ->
-			TokenData:send_bin(Bin);
+			TokenData:send_msg({bin, Bin});
 		true -> ok
 	end,
 	{next_state, room, State};
+handle_info({room_msg, {kick, {RoomId, RoomPid, KickType}}}, room, #state{user_id = UserId, room_info = {CurrentRoomPid, _, _}, token_data = TokenData} = State) ->
+	?FILE_LOG_DEBUG("room_kick, RoomId=~p, RoomPid=~p, kickType=~p room=>hall",[RoomId, RoomId, KickType]),
+	if
+		RoomPid =/= CurrentRoomPid ->
+			?FILE_LOG_WARNING("user_id=~p, room_kick_exception, currentRoomPid=~p", [UserId, CurrentRoomPid]),
+			{next_state, room, State};
+		true ->
+			if
+				TokenData =/= undefined ->
+					TokenData:send_msg({room_kick, {RoomId, KickType}});
+				true -> ok
+			end,
+			{next_state, hall, State}
+	end;
 handle_info(
-	{room_msg, {dissmiss, {ExitMake, DissmissRoomPid, SeatNumber, RoomOwnerId, IsAA}}}, room,
-	#state{user_id = UserId, room_info = {CurrentRoomPid, _, _}, card_count = CardCount, lock_card_count = LockCardCount} = State) ->
+	{room_msg, {dissmiss, {ExitType, RoomId, DissmissRoomPid, SeatNumber, RoomOwnerId, IsAA}}}, room,
+	#state{user_id = UserId, room_info = {CurrentRoomPid, _, _}, card_count = CardCount, lock_card_count = LockCardCount, token_data = TokenData} = State) ->
 	?FILE_LOG_DEBUG(
-		"room_dissmiss, exitMake=~p, dissmissRoomPid=~p, seat_number=~p, roomOwnerId=~p, isAA=~p user[~p] room=>hall",
-		[ExitMake, DissmissRoomPid, SeatNumber, RoomOwnerId, IsAA, UserId]),
+		"room_dissmiss, ExitType=~p, RoomId=~p, dissmissRoomPid=~p, seat_number=~p, roomOwnerId=~p, isAA=~p user[~p] room=>hall",
+		[ExitType, RoomId, DissmissRoomPid, SeatNumber, RoomOwnerId, IsAA, UserId]),
 	if
 		DissmissRoomPid =/= CurrentRoomPid ->
 			?FILE_LOG_WARNING("user_id=~p, room_diss_exception, currentRoomPid=~p", [UserId, CurrentRoomPid]),
@@ -490,16 +504,16 @@ handle_info(
 						if
 							IsAA =:= true ->
 								if
-									ExitMake =:= 0 -> {CardCount, LockCardCount - 1};
-									true -> {CardCount - 1, LockCardCount - 1}
+									ExitType =:= ?RDT_RAND_END -> {CardCount - 1, LockCardCount - 1};
+									true -> {CardCount, LockCardCount - 1}
 								end;
 							true ->
 								%%房主一个人包了
 								if
 									RoomOwnerId =:= UserId ->
 										if
-											ExitMake =:= 0 -> {CardCount, LockCardCount - 4};
-											true -> {CardCount - 4, LockCardCount - 4}
+											ExitType =:= ?RDT_RAND_END -> {CardCount - 4, LockCardCount - 4};
+											true -> {CardCount, LockCardCount - 4}
 										end;
 									true ->
 										{CardCount, LockCardCount}
@@ -512,6 +526,13 @@ handle_info(
 				[UserId, RoomOwnerId, CardCount, NewCardCount, LockCardCount, NewLockCardCount]),
 			?FILE_LOG_DEBUG("user_id=~p room=>hall.", [UserId]),
 			%%如果当前有qp_user的绑定
+			%%通知客户端房间解散了
+			if
+				TokenData =/= undefined ->
+					TokenData:send_msg({room_dissmiss, {RoomId, ExitType}});
+				true ->
+					ok
+			end,
 			{next_state, hall, State#state{room_info = undefined, card_count = NewCardCount, lock_card_count = NewLockCardCount}}
 	end;
 handle_info(_Info, StateName, State) ->

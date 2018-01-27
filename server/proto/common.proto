@@ -27,10 +27,12 @@ enum ws_cmd {
     CMD_QP_STANDUP_RSP = 1012;          // qp_standup_rsp
     CMD_QP_STANDUP_PUSH = 1013;         // qp_standup_push
 
-    CMD_QP_EXIT_ROOM_REQ = 1014;        // qp_exit_room_req
-    CMD_QP_EXIT_ROOM_RSP = 1015;        // qp_exit_room_rsp
-    CMD_QP_EXIT_ROOM_PUSH = 1016;       // qp_exit_room_push
-
+    CMD_QP_EXIT_ROOM_REQ = 1014;                // qp_exit_room_req
+    CMD_QP_EXIT_ROOM_RSP = 1015;                // qp_exit_room_rsp
+    CMD_QP_EXIT_ROOM_PUSH = 1016;               // qp_exit_room_push
+    CMD_QP_ROOM_DISSMISS = 1017;                // qp_room_dissmiss
+    CMD_QP_ROOM_KICK = 1018;                    // qp_room_kick 从房间被移除
+    CMD_QP_USER_ONLINE_STATE_CHANGE = 1019;     // qp_user_online_state_change 在线状态变更
     CMD_QP_GAME_DATA = 2001;        // qp_game_data
 
 
@@ -160,6 +162,25 @@ message qp_exit_room_push {
     required int32 user_id = 1;
     required int32 seat_num = 2;
 }
+
+
+message qp_room_dissmiss{
+    required int32 room_id = 1;
+    required int32 type = 2;
+}
+
+message qp_room_kick{
+    required int32 room_id = 1;
+    required int32 user_id = 2;
+    required int32 type = 3;
+}
+
+message qp_user_online_state_change {
+    required int32 room_id = 1;
+    required int32 user_id = 2;
+    required bool online = 3;
+}
+
 
 
 message qp_game_data {

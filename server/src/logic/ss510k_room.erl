@@ -11,6 +11,7 @@
 -include("../qp_error.hrl").
 -include("../../deps/file_log/include/file_log.hrl").
 -include("../../include/common_pb.hrl").
+-include("../qp_define.hrl").
 -behaviour(gen_fsm).
 
 %% API
@@ -240,8 +241,19 @@ wait({sitdown, {UserId, SeatNum}}, _From, State) ->
 							SitdownPush = #qp_sitdown_push{seat_num = SelectSeatNum, user_id = UserId},
 							PushPbBin = qp_proto:encode_qp_packet(SitdownPush),
 							room_broadcast(UserBasicDataTree, {bin, PushPbBin}, UserId),
-							%%告诉本人成功
-							{reply, {success, SelectSeatNum}, wait, State#state{seat_tree = NewSeatTree, ob_set = gb_sets:delete(UserId, ObSet)}}
+							%%告诉本人成功,并返回
+							%%检查是否四个座位都坐满了(游戏开始)
+							%%
+							case check_full(NewSeatTree) of
+								true ->
+									%%满了,移除OB的玩家
+									{NewObSet, NewUserBasicDataTree} = remove_obuser(RoomId, gb_sets:delete(UserId, ObSet), NewSeatTree, UserBasicDataTree, RoomCfg:get(is_ob)),
+									%%初始化游戏数据，通知所有人游戏开始了
+									
+									{reply, {success, SelectSeatNum}, game, State#state{seat_tree = NewSeatTree, ob_set = NewObSet, user_basicdata_tree = NewUserBasicDataTree}};
+								fasle ->
+									{reply, {success, SelectSeatNum}, wait, State#state{seat_tree = NewSeatTree, ob_set = gb_sets:delete(UserId, ObSet)}}
+							end
 					end
 			end
 	end;
@@ -425,14 +437,14 @@ terminate(_Reason, _StateName,
 	lists:foreach(
 		fun(ObUserId) ->
 			ObUserBasicData = gb_trees:get(ObUserId, UserBasicDataTree),
-			ObUserBasicData:send_room_msg({dissmiss, {ExitMake, self(), -1, OwnerBasicData:get(id), RoomCfg:get(aa)}})
+			ObUserBasicData:send_room_msg({dissmiss, {ExitMake, RoomId, self(), -1, OwnerBasicData:get(id), RoomCfg:get(aa)}})
 		end, gb_sets:to_list(ObSet)),
 	lists:foreach(
 		fun({SeatNumber, SeatUserId}) ->
 			if
 				SeatUserId =/= undefined ->
 					SetUserBasicData = gb_trees:get(SeatUserId, UserBasicDataTree),
-					SetUserBasicData:send_room_msg({dissmiss, {ExitMake, self(), SeatNumber, OwnerBasicData:get(id), RoomCfg:get(aa)}});
+					SetUserBasicData:send_room_msg({dissmiss, {ExitMake, RoomId, self(), SeatNumber, OwnerBasicData:get(id), RoomCfg:get(aa)}});
 				true -> ok
 			end
 		end, gb_trees:to_list(SeatTree)),
@@ -592,3 +604,42 @@ room_broadcast(UserBasicDataTree, Msg, FilterUserId) ->
 				_ -> RoomUserBasicData:send_room_msg(Msg)
 			end
 		end, gb_trees:values(UserBasicDataTree)).
+
+
+%%给座位上的人广播
+room_seat_broadcast(UserBasicDataTree, SeatTree, Msg) ->
+	lists:foreach(
+		fun(SeatUserId) ->
+			UserBasicData = gb_trees:get(SeatUserId, UserBasicDataTree),
+			UserBasicData:send_room_msg(Msg)
+		end, gb_trees:values(SeatTree)).
+
+
+check_full(SeatTree) ->
+	SeatCount =
+		lists:foldl(
+			fun({_SeatNum, UserId}, Count) ->
+				if
+					UserId =/= undefined -> Count + 1;
+					true -> Count
+				end
+			end, 0, gb_trees:to_list(SeatTree)),
+	SeatCount =:= 4.
+
+
+remove_obuser(_RoomId, ObSet, _SeatTree, UserBasicDataTree, true) -> {ObSet, UserBasicDataTree};
+remove_obuser(RoomId, ObSet, SeatTree, UserBasicDataTree, false) ->
+	lists:foreach(
+		fun(ObUserId) ->
+			Push = #qp_exit_room_push{user_id = ObUserId, seat_num = -1},
+			PushBin = qp_proto:encode_qp_packet(Push),
+			room_seat_broadcast(UserBasicDataTree, SeatTree, {bin, PushBin}),
+			ObUserBasicData = gb_trees:get(ObUserId, UserBasicDataTree),
+			ObUserBasicData:send_room_msg({kick, {RoomId, self(), ?RT_GAME_START_NOT_OB}})
+		end, gb_sets:to_list(ObSet)),
+	NewUserBasicDataTree =
+		lists:foldl(
+			fun(ObUserId, T) ->
+				gb_trees:delete(ObUserId, T)
+			end, UserBasicDataTree, gb_sets:to_list(ObSet)),
+	{gb_sets:empty(), NewUserBasicDataTree}.
