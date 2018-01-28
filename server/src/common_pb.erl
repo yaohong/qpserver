@@ -7,6 +7,7 @@
 -export([encode_qp_ping_rsp/1, decode_qp_ping_rsp/1,
 	 encode_qp_ping_req/1, decode_qp_ping_req/1,
 	 encode_qp_game_data/1, decode_qp_game_data/1,
+	 encode_qp_kick/1, decode_qp_kick/1,
 	 encode_qp_user_online_state_change/1,
 	 decode_qp_user_online_state_change/1,
 	 encode_qp_room_kick/1, decode_qp_room_kick/1,
@@ -42,6 +43,8 @@
 -record(qp_ping_req, {noop}).
 
 -record(qp_game_data, {game_data}).
+
+-record(qp_kick, {noop}).
 
 -record(qp_user_online_state_change,
 	{room_id, user_id, online}).
@@ -111,6 +114,10 @@ encode_qp_ping_req(Record)
 encode_qp_game_data(Record)
     when is_record(Record, qp_game_data) ->
     encode(qp_game_data, Record).
+
+encode_qp_kick(Record)
+    when is_record(Record, qp_kick) ->
+    encode(qp_kick, Record).
 
 encode_qp_user_online_state_change(Record)
     when is_record(Record, qp_user_online_state_change) ->
@@ -413,6 +420,10 @@ encode(qp_user_online_state_change, Record) ->
 			   with_default(Record#qp_user_online_state_change.online,
 					none),
 			   bool, [])]);
+encode(qp_kick, Record) ->
+    iolist_to_binary([pack(1, optional,
+			   with_default(Record#qp_kick.noop, none), int32,
+			   [])]);
 encode(qp_game_data, Record) ->
     iolist_to_binary([pack(1, required,
 			   with_default(Record#qp_game_data.game_data, none),
@@ -453,6 +464,9 @@ decode_qp_ping_req(Bytes) when is_binary(Bytes) ->
 
 decode_qp_game_data(Bytes) when is_binary(Bytes) ->
     decode(qp_game_data, Bytes).
+
+decode_qp_kick(Bytes) when is_binary(Bytes) ->
+    decode(qp_kick, Bytes).
 
 decode_qp_user_online_state_change(Bytes)
     when is_binary(Bytes) ->
@@ -666,6 +680,10 @@ decode(qp_user_online_state_change, Bytes)
 	     {1, room_id, int32, []}],
     Decoded = decode(Bytes, Types, []),
     to_record(qp_user_online_state_change, Decoded);
+decode(qp_kick, Bytes) when is_binary(Bytes) ->
+    Types = [{1, noop, int32, []}],
+    Decoded = decode(Bytes, Types, []),
+    to_record(qp_kick, Decoded);
 decode(qp_game_data, Bytes) when is_binary(Bytes) ->
     Types = [{1, game_data, bytes, []}],
     Decoded = decode(Bytes, Types, []),
@@ -876,6 +894,12 @@ to_record(qp_user_online_state_change, DecodedTuples) ->
 					 Record, Name, Val)
 		end,
 		#qp_user_online_state_change{}, DecodedTuples);
+to_record(qp_kick, DecodedTuples) ->
+    lists:foldl(fun ({_FNum, Name, Val}, Record) ->
+			set_record_field(record_info(fields, qp_kick), Record,
+					 Name, Val)
+		end,
+		#qp_kick{}, DecodedTuples);
 to_record(qp_game_data, DecodedTuples) ->
     lists:foldl(fun ({_FNum, Name, Val}, Record) ->
 			set_record_field(record_info(fields, qp_game_data),

@@ -614,3 +614,5 @@ exitroom(RoomPid, UserId, SeatNum) ->
 		success -> success;
 		{failed, ErrorCode} -> throw({custom, ErrorCode})
 	end.
+
+

@@ -29,7 +29,7 @@
 -export([head_len/2,
 	closed/1,
 	complete_packet/2,
-	timer_callback/2
+	timer_callback/2, exit_callback/2
 ]).
 -export([
 	start/3,
@@ -37,6 +37,7 @@
 ]).
 -define(SERVER, ?MODULE).
 -define(TIMER_SPACE, 10).
+-define(EXIT_WAIT_TIME, 10).
 -define(RECV_TIMEOUT, 60).
 
 -record(state, {
@@ -66,6 +67,8 @@ complete_packet(Pid, Bin) when is_pid(Pid) andalso is_binary(Bin) ->
 timer_callback(_Ref, Pid) ->
 	Pid ! timeout_check.
 
+exit_callback(_Ref, Pid) ->
+	Pid ! exit.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -208,6 +211,9 @@ handle_event({complete_packet, Bin}, StateName, #state{last_recv_packet_time = O
 			end,
 		{next_state, NewStateName, NewState#state{last_recv_packet_time = NewLastRecvPacketTime}}
 	catch
+		throw:{custom, Error} ->
+			?FILE_LOG_DEBUG("custom, error=~p", [Error]),
+			{stop, normal, State};
 		What:Type ->
 			?FILE_LOG_ERROR("~p, ~p, ~p", [What, Type, erlang:get_stacktrace()]),
 			{stop, normal, State}
@@ -216,8 +222,8 @@ handle_event(_Event, StateName, State) ->
 	{next_state, StateName, State}.
 
 state_name_check(wait_login) -> ok;
-state_name_check(login_success) -> ok.
-
+state_name_check(login_success) -> ok;
+state_name_check(wait_exit) -> ok.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -290,7 +296,17 @@ handle_info({logic_msg, {room_kick, {RoomId, KickType}}}, login_success, #state{
 
 handle_info(kick, login_success, State) ->
 	?FILE_LOG_DEBUG("kick ~p ~p", [self(), login_success]),
-	{stop, normal, State#state{token_data = undefined}};
+	send_packet(#qp_kick{noop = 1}, State),
+	CurrentTime = qp_util:timestamp(),
+	timer_manager:addDelayTask(
+		CurrentTime,
+		CurrentTime + ?EXIT_WAIT_TIME,
+		qp_user, exit_callback, [self()]),
+	{next_state, wait_exit, State#state{token_data = undefined}};
+
+handle_info(exit, wait_exit, #state{user_id = UserId} = State) ->
+	?FILE_LOG_DEBUG("exit ~p", [UserId]),
+	{stop, normal, State};
 handle_info(_Info, StateName, State) ->
 	?FILE_LOG_WARNING("unkown ino ~p, statName=~p", [_Info, StateName]),
 	{next_state, StateName, State}.
@@ -381,7 +397,7 @@ packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, #state{user_id 
 	} = RoomCfg,
 
 	?FILE_LOG_DEBUG("room_name=~ts, is_aa=~p, double_down_score=~p, is_laizi_playmethod=~p, is_ob=~p, is_random=~p, is_not_voice=~p, is_safe_mode=~p, lock_id_list=~p",
-		[RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockUserIdList]),
+		[RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, undefined_to_empty(LockUserIdList)]),
 
 	case room_user_mgr:request(
 		UserId,
@@ -389,7 +405,7 @@ packet_handle(#qp_create_room_req{cfg = RoomCfg}, login_success, #state{user_id 
 			TokenData,
 			{
 				create_room,
-				{RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, LockUserIdList}
+				{RoomName, AA, DoubleDownScore, IsLaiziPlaymethod, IsOb, IsRandom, IsNotVoice, IsSafeMode, undefined_to_empty(LockUserIdList)}
 			}
 		}) of
 		{success, RoomId} ->
@@ -475,9 +491,14 @@ packet_handle(#qp_exit_room_req{seat_num = SeatNum}, login_success, #state{user_
 	end,
 	{login_success, State, true};
 packet_handle(Event, login_success, #state{user_id = UserId}) ->
+	?FILE_LOG_DEBUG("user_id[~p] unkown event ~p", [UserId, Event]),
+	throw({custom, unknown_event});
 
-	?FILE_LOG_DEBUG("user_id[~p] event ~p ping", [UserId, Event]),
-	throw({custom, unknown_event}).
+packet_handle(Event, wait_exit, #state{user_id = UserId}) ->
+	?FILE_LOG_DEBUG("user_id[~p] state[exit], unkown event ~p", [UserId, Event]),
+	throw({custom, wait_exit}).
 
+undefined_to_empty(undefined) -> [];
+undefined_to_empty(L) -> L.
 
 

@@ -249,9 +249,9 @@ wait({sitdown, {UserId, SeatNum}}, _From, State) ->
 									%%满了,移除OB的玩家
 									{NewObSet, NewUserBasicDataTree} = remove_obuser(RoomId, gb_sets:delete(UserId, ObSet), NewSeatTree, UserBasicDataTree, RoomCfg:get(is_ob)),
 									%%初始化游戏数据，通知所有人游戏开始了
-									
+
 									{reply, {success, SelectSeatNum}, game, State#state{seat_tree = NewSeatTree, ob_set = NewObSet, user_basicdata_tree = NewUserBasicDataTree}};
-								fasle ->
+								false ->
 									{reply, {success, SelectSeatNum}, wait, State#state{seat_tree = NewSeatTree, ob_set = gb_sets:delete(UserId, ObSet)}}
 							end
 					end
@@ -555,7 +555,8 @@ select_seatnum(SeatTree, UserId, SeatNum, IsRandom, LockIdList) ->
 							if
 								AvailableSeatCount > 0 ->
 									select_seatnum(SeatTree, UserId, SeatNum, IsRandom);
-								true -> {SeatTree, ?LOGIC_ERROR_SEAT_FULL}
+								true ->
+									{SeatTree, ?LOGIC_ERROR_SEAT_FULL}
 							end
 					end
 			end
@@ -564,7 +565,8 @@ select_seatnum(SeatTree, UserId, SeatNum, IsRandom, LockIdList) ->
 select_seatnum(SeatTree, UserId, SeatNum, IsRandom) when IsRandom =:= true orelse (SeatNum < 0 andalso SeatNum > 3) ->
 	%%随机选择
 	case random_select_seatnum(SeatTree) of
-		full -> {SeatTree, ?LOGIC_ERROR_SEAT_FULL};
+		full ->
+			{SeatTree, ?LOGIC_ERROR_SEAT_FULL};
 		SelectSeatNum when is_integer(SelectSeatNum) -> {gb_trees:update(SelectSeatNum, UserId, SeatTree), SelectSeatNum, 0}
 	end;
 select_seatnum(SeatTree, UserId, SeatNum, _) ->
@@ -583,6 +585,7 @@ random_select_seatnum(SeatTree) ->
 					true -> L
 				end
 			end, [], gb_trees:to_list(SeatTree)),
+	?FILE_LOG_DEBUG("ll = ~p", [LL]),
 	if
 		LL =:= [] -> full;
 		true ->

@@ -72,7 +72,7 @@ clientcard_prehandle(ClientCardList) ->
 	CardScore = ss510k_user_util:calc_score(ServerCardList),
 	%%获取牌型的分值
 	CardTypeScore = ss510k_user_util:calc_cardtype_score(ClearReplaceCardList),
-	{ClearReplaceCardList, ServerCardList, CardScore + CardTypeScore, ReplaceCardList}.
+	{ClearReplaceCardList, ServerCardList, {CardScore - CardTypeScore}, ReplaceCardList}.
 
 %%查找癞子替换的牌
 find_replace_card(ClientCardList) ->
