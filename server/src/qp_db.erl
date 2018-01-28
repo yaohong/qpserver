@@ -63,7 +63,7 @@ load_game_data(UserId, IsCreate) ->
 						[qp_util:to_binary(UserId), <<"10">>, qp_util:to_binary(UserId), <<"">>]),
 					case yhsql:fetch(sql:pool_name(), InsertSql) of
 						{updated, #yhsql_result{affectedrows = 1}} ->
-							{success, {10, "", ""}, true};
+							{success, {10, qp_util:to_list(UserId), ""}, true};
 						Other1 ->
 							?FILE_LOG_ERROR("~p", [Other1]),
 							{failed, ?DB_SYSTEM_ERROR}
